@@ -53,26 +53,38 @@ if uploaded_file:
     st.subheader("📋 Extracted MCQs")
     st.text_area("Extracted Questions", extracted_mcqs, height=300)
 
+    # Download only extracted MCQs
+    mcq_only_doc = Document()
+    mcq_only_doc.add_heading("Extracted MCQs", level=1)
+    for line in extracted_mcqs.split("\n"):
+        mcq_only_doc.add_paragraph(line)
+    mcq_only_buffer = BytesIO()
+    mcq_only_doc.save(mcq_only_buffer)
+    mcq_only_buffer.seek(0)
+    st.download_button(
+        label="📄 Download Extracted Questions Only",
+        data=mcq_only_buffer,
+        file_name="extracted_mcqs.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+
     if st.button("🧪 Generate Practice Questions"):
         with st.spinner("Generating..."):
             exercises = generate_practice_questions(extracted_mcqs)
         st.subheader("🎯 Practice Questions")
         st.text_area("Generated Practice", exercises, height=400)
 
-        # Word document download
+        # Word document with everything
         doc = Document()
         doc.add_heading("Extracted MCQs", level=1)
         for line in extracted_mcqs.split("\n"):
             doc.add_paragraph(line)
-
         doc.add_heading("Generated Practice Questions", level=1)
         for line in exercises.split("\n"):
             doc.add_paragraph(line)
-
         buffer = BytesIO()
         doc.save(buffer)
         buffer.seek(0)
-
         st.download_button(
             label="📄 Download All as Word Document",
             data=buffer,
