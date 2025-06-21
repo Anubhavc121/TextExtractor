@@ -8,7 +8,7 @@ from docx import Document
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 
 st.title("📘 MCQ Extractor & Generator (Perseus Format)")
-st.write("Upload image(s) containing multiple choice questions, or add your own. Get Perseus-formatted output (one JSON per question).")
+st.write("Upload image(s) containing multiple choice questions, or add your own. Get Perseus-formatted output (combined as a JSON array for bulk upload).")
 
 uploaded_files = st.file_uploader("Upload MCQ images", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
@@ -189,25 +189,18 @@ for m in st.session_state.get("manual_mcqs", []):
     })
 
 if all_combined_mcqs:
-    st.subheader("✅ Perseus-Formatted MCQs (Individual JSON Objects)")
-
+    st.subheader("✅ Perseus-Formatted MCQs (Combined JSON Array)")
     perseus_output = [to_perseus_format(q) for q in all_combined_mcqs]
+    perseus_json = json.dumps(perseus_output, indent=2, ensure_ascii=False)
+    st.text_area("📋 Perseus JSON (for upload)", perseus_json, height=400)
 
-    # Show each as a standalone JSON object (for copy-paste)
-    for idx, obj in enumerate(perseus_output, 1):
-        st.markdown(f"**MCQ {idx} Perseus JSON:**")
-        st.code(json.dumps(obj, indent=2, ensure_ascii=False), language="json")
-
-    # Download all as single text file, with each JSON object separated by two newlines
-    perseus_json_text = "\n\n".join(json.dumps(obj, indent=2, ensure_ascii=False) for obj in perseus_output)
     st.download_button(
-        "📘 Download All MCQs (each as separate JSON object)",
-        data=perseus_json_text,
-        file_name="perseus_mcqs.txt",
-        mime="text/plain"
+        "📘 Download Perseus JSON",
+        data=perseus_json,
+        file_name="perseus_mcqs.json",
+        mime="application/json"
     )
 
-    # Optionally, download as docx (for teacher review)
     doc = Document()
     doc.add_heading("MCQs", 0)
     for q in all_combined_mcqs:
