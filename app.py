@@ -7,7 +7,7 @@ from docx import Document
 
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 
-st.title("📘 MCQ Extractor & Generator (Perseus Format)")
+st.title("📘 MCQ Extractor & Generator")
 st.write("Upload image(s) containing multiple choice questions. Get Perseus-formatted output.")
 
 uploaded_files = st.file_uploader("Upload MCQ images", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
