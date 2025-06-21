@@ -8,9 +8,32 @@ from docx import Document
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 
 st.title("📘 MCQ Extractor & Generator (Perseus Format)")
-st.write("Upload image(s) containing multiple choice questions. Get Perseus-formatted output.")
+st.write("Upload image(s) containing multiple choice questions, or add your own. Get Perseus-formatted output.")
 
 uploaded_files = st.file_uploader("Upload MCQ images", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+
+# --- MANUAL MCQ ENTRY IN SIDEBAR ---
+st.sidebar.title("Add MCQ Manually")
+if "manual_mcqs" not in st.session_state:
+    st.session_state.manual_mcqs = []
+
+with st.sidebar.form("manual_mcq_form"):
+    manual_q = st.text_input("Question text")
+    n_opt = st.number_input("Number of options", 2, 8, value=4)
+    manual_opts = [st.text_input(f"Option {i+1}") for i in range(n_opt)]
+    manual_ans = st.number_input("Correct option number (1-based)", 1, n_opt, value=1)
+    manual_hint1 = st.text_input("Hint 1 (optional)", "")
+    manual_hint2 = st.text_input("Hint 2 (optional)", "")
+    add_btn = st.form_submit_button("➕ Add MCQ")
+    if add_btn and manual_q and all(manual_opts):
+        st.session_state.manual_mcqs.append({
+            "question": manual_q,
+            "options": manual_opts,
+            "answer_index": manual_ans - 1,
+            "hint1": manual_hint1,
+            "hint2": manual_hint2
+        })
+        st.sidebar.success("MCQ added!")
 
 def extract_json_mcqs_from_image(image_bytes):
     base64_image = base64.b64encode(image_bytes).decode("utf-8")
@@ -41,7 +64,60 @@ def extract_json_mcqs_from_image(image_bytes):
 
 def to_perseus_format(mcq):
     options = [{"content": opt, "correct": i == mcq["answer_index"]} for i, opt in enumerate(mcq["options"])]
-    
+    # Custom hints if available
+    hints = []
+    hint1 = mcq.get("hint1", "").strip()
+    hint2 = mcq.get("hint2", "").strip()
+    if hint1:
+        hints.append({"replace": False, "content": hint1, "images": {}, "widgets": {}})
+    if hint2:
+        hints.append({"replace": False, "content": hint2, "images": {}, "widgets": {}})
+    if not hints:
+        # default hints
+        hints = [
+            {
+                "replace": False,
+                "content": "Hint 1: Consider the social system of Hinduism at the time.",
+                "images": {},
+                "widgets": {}
+            },
+            {
+                "replace": False,
+                "content": "Hint 2: Buddhism did not follow a rigid caste structure.",
+                "images": {},
+                "widgets": {}
+            }
+        ]
+    # Always add answer reveal hint
+    hints.append(
+        {
+            "replace": False,
+            "content": "The correct answer is:\n\n[[☃ radio 1]]",
+            "images": {},
+            "widgets": {
+                "radio 1": {
+                    "type": "radio",
+                    "alignment": "default",
+                    "static": True,
+                    "graded": True,
+                    "options": {
+                        "choices": options,
+                        "randomize": False,
+                        "multipleSelect": False,
+                        "displayCount": None,
+                        "hasNoneOfTheAbove": False,
+                        "onePerLine": True,
+                        "deselectEnabled": False
+                    },
+                    "version": {
+                        "major": 1,
+                        "minor": 0
+                    }
+                }
+            }
+        }
+    )
+
     return {
         "question": {
             "content": f"{mcq['question']}\n\n[[☃ radio 1]]",
@@ -79,51 +155,12 @@ def to_perseus_format(mcq):
             "major": 0,
             "minor": 1
         },
-        "hints": [
-            {
-                "replace": False,
-                "content": "Hint 1: Consider the social system of Hinduism at the time.",
-                "images": {},
-                "widgets": {}
-            },
-            {
-                "replace": False,
-                "content": "Hint 2: Buddhism did not follow a rigid caste structure.",
-                "images": {},
-                "widgets": {}
-            },
-            {
-                "replace": False,
-                "content": "The correct answer is:\n\n[[☃ radio 1]]",
-                "images": {},
-                "widgets": {
-                    "radio 1": {
-                        "type": "radio",
-                        "alignment": "default",
-                        "static": True,
-                        "graded": True,
-                        "options": {
-                            "choices": options,
-                            "randomize": False,
-                            "multipleSelect": False,
-                            "displayCount": None,
-                            "hasNoneOfTheAbove": False,
-                            "onePerLine": True,
-                            "deselectEnabled": False
-                        },
-                        "version": {
-                            "major": 1,
-                            "minor": 0
-                        }
-                    }
-                }
-            }
-        ]
+        "hints": hints
     }
 
-if uploaded_files:
-    all_mcqs = []
+all_mcqs = []
 
+if uploaded_files:
     for img in uploaded_files:
         st.image(img, caption=img.name, use_container_width=True)
         with st.spinner(f"Extracting MCQs from {img.name}..."):
@@ -141,61 +178,71 @@ if uploaded_files:
             except json.JSONDecodeError:
                 st.warning(f"⚠️ Could not parse output from {img.name}")
 
-    if all_mcqs:
-        st.subheader("✅ Perseus-Formatted MCQs")
+# Combine image MCQs and manual MCQs
+all_combined_mcqs = all_mcqs.copy()
+for m in st.session_state.get("manual_mcqs", []):
+    all_combined_mcqs.append({
+        "question": m["question"],
+        "options": m["options"],
+        "answer_index": m["answer_index"],
+        "hint1": m["hint1"],
+        "hint2": m["hint2"]
+    })
 
-        perseus_output = [to_perseus_format(q) for q in all_mcqs]
-        perseus_json = json.dumps(perseus_output, indent=2)
-        st.text_area("📋 Perseus JSON", perseus_json, height=300)
+if all_combined_mcqs:
+    st.subheader("✅ Perseus-Formatted MCQs")
+    perseus_output = [to_perseus_format(q) for q in all_combined_mcqs]
+    perseus_json = json.dumps(perseus_output, indent=2, ensure_ascii=False)
+    st.text_area("📋 Perseus JSON", perseus_json, height=300)
 
-        st.download_button(
-            "📘 Download Perseus JSON", 
-            data=perseus_json, 
-            file_name="perseus_mcqs.json", 
-            mime="application/json"
-        )
+    st.download_button(
+        "📘 Download Perseus JSON",
+        data=perseus_json,
+        file_name="perseus_mcqs.json",
+        mime="application/json"
+    )
 
-        doc = Document()
-        doc.add_heading("MCQs", 0)
-        for q in all_mcqs:
-            doc.add_paragraph(f"Q: {q['question']}")
-            for i, opt in enumerate(q['options']):
-                prefix = "✅ " if i == q["answer_index"] else "- "
-                doc.add_paragraph(f"{prefix}{opt}")
-            doc.add_paragraph()
-        buf = BytesIO()
-        doc.save(buf)
-        buf.seek(0)
-        st.download_button(
-            "📝 Download Word Doc", 
-            data=buf, 
-            file_name="mcqs.docx", 
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        )
+    doc = Document()
+    doc.add_heading("MCQs", 0)
+    for q in all_combined_mcqs:
+        doc.add_paragraph(f"Q: {q['question']}")
+        for i, opt in enumerate(q['options']):
+            prefix = "✅ " if i == q["answer_index"] else "- "
+            doc.add_paragraph(f"{prefix}{opt}")
+        doc.add_paragraph()
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    st.download_button(
+        "📝 Download Word Doc",
+        data=buf,
+        file_name="mcqs.docx",
+        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
 
-        if st.button("✨ Generate Similar Questions"):
-            st.subheader("🧠 Similar Questions")
-            for q in all_mcqs:
-                prompt = (
-                    f"Given this MCQ:\nQ: {q['question']}\nOptions: {q['options']}\n\n"
-                    "Generate 1-2 new MCQs that assess the same concept. Format:\n"
-                    "[{\"question\": \"...\", \"options\": [...], \"answer_index\": ...}]"
+    if st.button("✨ Generate Similar Questions"):
+        st.subheader("🧠 Similar Questions")
+        for q in all_combined_mcqs:
+            prompt = (
+                f"Given this MCQ:\nQ: {q['question']}\nOptions: {q['options']}\n\n"
+                "Generate 1-2 new MCQs that assess the same concept. Format:\n"
+                "[{\"question\": \"...\", \"options\": [...], \"answer_index\": ...}]"
+            )
+            try:
+                res = openai.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=300
                 )
-                try:
-                    res = openai.chat.completions.create(
-                        model="gpt-4o",
-                        messages=[{"role": "user", "content": prompt}],
-                        max_tokens=300
-                    )
-                    output = res.choices[0].message.content.strip()
-                    if output.startswith("```json"):
-                        output = output.removeprefix("```json").strip().removesuffix("```").strip()
-                    new_mcqs = json.loads(output)
-                    for nq in new_mcqs:
-                        st.markdown(f"**Q: {nq['question']}**")
-                        for i, opt in enumerate(nq["options"]):
-                            prefix = "✅ " if i == nq["answer_index"] else "- "
-                            st.markdown(f"{prefix}{opt}")
-                        st.markdown("---")
-                except:
-                    st.warning(f"❗ Could not generate variation for: {q['question']}")
+                output = res.choices[0].message.content.strip()
+                if output.startswith("```json"):
+                    output = output.removeprefix("```json").strip().removesuffix("```").strip()
+                new_mcqs = json.loads(output)
+                for nq in new_mcqs:
+                    st.markdown(f"**Q: {nq['question']}**")
+                    for i, opt in enumerate(nq["options"]):
+                        prefix = "✅ " if i == nq["answer_index"] else "- "
+                        st.markdown(f"{prefix}{opt}")
+                    st.markdown("---")
+            except:
+                st.warning(f"❗ Could not generate variation for: {q['question']}")
