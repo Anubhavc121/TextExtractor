@@ -40,14 +40,20 @@ def extract_json_mcqs_from_image(image_bytes):
     return response.choices[0].message.content
 
 def to_perseus_format(mcq):
-    options = [{"content": opt, "correct": i == mcq["answer_index"]} for i, opt in enumerate(mcq["options"])]
-    radio_widget = {
+    choices = [
+        {
+            "content": opt,
+            "correct": i == mcq["answer_index"]
+        } for i, opt in enumerate(mcq["options"])
+    ]
+
+    radio_widget_dynamic = {
         "type": "radio",
         "alignment": "default",
         "static": False,
         "graded": True,
         "options": {
-            "choices": options,
+            "choices": choices,
             "randomize": True,
             "multipleSelect": False,
             "displayCount": None,
@@ -55,17 +61,39 @@ def to_perseus_format(mcq):
             "onePerLine": True,
             "deselectEnabled": False
         },
-        "version": {"major": 1, "minor": 0}
+        "version": {
+            "major": 1,
+            "minor": 0
+        }
     }
-    static_radio = dict(radio_widget)
-    static_radio["static"] = True
-    static_radio["options"]["randomize"] = False
+
+    radio_widget_static = {
+        "type": "radio",
+        "alignment": "default",
+        "static": True,
+        "graded": True,
+        "options": {
+            "choices": choices,
+            "randomize": False,
+            "multipleSelect": False,
+            "displayCount": None,
+            "hasNoneOfTheAbove": False,
+            "onePerLine": True,
+            "deselectEnabled": False
+        },
+        "version": {
+            "major": 1,
+            "minor": 0
+        }
+    }
 
     return {
         "question": {
-            "content": f"{mcq['question']}\n\n[[☃ radio 1]]",
+            "content": mcq["question"] + "\n\n[[☃ radio 1]]",
             "images": {},
-            "widgets": {"radio 1": radio_widget}
+            "widgets": {
+                "radio 1": radio_widget_dynamic
+            }
         },
         "answerArea": {
             "calculator": False,
@@ -74,15 +102,30 @@ def to_perseus_format(mcq):
             "tTable": False,
             "zTable": False
         },
-        "itemDataVersion": {"major": 0, "minor": 1},
+        "itemDataVersion": {
+            "major": 0,
+            "minor": 1
+        },
         "hints": [
-            {"replace": False, "content": "Hint 1: Think carefully about each option.", "images": {}, "widgets": {}},
-            {"replace": False, "content": "Hint 2: Eliminate obviously incorrect answers.", "images": {}, "widgets": {}},
+            {
+                "replace": False,
+                "content": "Hint 1: Consider the social system of Hinduism at the time.",
+                "images": {},
+                "widgets": {}
+            },
+            {
+                "replace": False,
+                "content": "Hint 2: Buddhism did not follow a rigid caste structure.",
+                "images": {},
+                "widgets": {}
+            },
             {
                 "replace": False,
                 "content": "The correct answer is:\n\n[[☃ radio 1]]",
                 "images": {},
-                "widgets": {"radio 1": static_radio}
+                "widgets": {
+                    "radio 1": radio_widget_static
+                }
             }
         ]
     }
