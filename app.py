@@ -125,7 +125,7 @@ if uploaded_files:
     all_mcqs = []
 
     for img in uploaded_files:
-        st.image(img, caption=img.name, use_column_width=True)
+        st.image(img, caption=img.name, use_container_width=True)
         with st.spinner(f"Extracting MCQs from {img.name}..."):
             raw_json = extract_json_mcqs_from_image(img.read())
 
