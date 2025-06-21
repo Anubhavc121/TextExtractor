@@ -8,7 +8,7 @@ from docx import Document
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 
 st.title("📘 MCQ Extractor & Generator (Perseus Format)")
-st.write("Upload image(s) containing multiple choice questions, or add your own. Get Perseus-formatted output (combined as a JSON array for bulk upload).")
+st.write("Upload image(s) containing multiple choice questions, or add your own. Get Perseus-formatted output (as a single JSON array for bulk upload).")
 
 uploaded_files = st.file_uploader("Upload MCQ images", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
@@ -189,10 +189,17 @@ for m in st.session_state.get("manual_mcqs", []):
     })
 
 if all_combined_mcqs:
-    st.subheader("✅ Perseus-Formatted MCQs (Combined JSON Array)")
+    st.subheader("✅ Perseus-Formatted MCQs (JSON Array for Bulk Upload)")
+
     perseus_output = [to_perseus_format(q) for q in all_combined_mcqs]
     perseus_json = json.dumps(perseus_output, indent=2, ensure_ascii=False)
-    st.text_area("📋 Perseus JSON (for upload)", perseus_json, height=400)
+
+    # Clean, copy-paste-ready JSON (no markdown/code formatting)
+    st.text_area(
+        "📋 Copy-paste this Perseus JSON for your site:",
+        perseus_json,
+        height=500
+    )
 
     st.download_button(
         "📘 Download Perseus JSON",
@@ -201,6 +208,7 @@ if all_combined_mcqs:
         mime="application/json"
     )
 
+    # Optional: word doc download
     doc = Document()
     doc.add_heading("MCQs", 0)
     for q in all_combined_mcqs:
