@@ -7,7 +7,7 @@ from docx import Document
 
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 
-st.title("📘 MCQ Extractor & Generator")
+st.title("📘 MCQ Extractor & Generator (Perseus Format)")
 st.write("Upload image(s) containing multiple choice questions. Get Perseus-formatted output.")
 
 uploaded_files = st.file_uploader("Upload MCQ images", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
@@ -40,59 +40,32 @@ def extract_json_mcqs_from_image(image_bytes):
     return response.choices[0].message.content
 
 def to_perseus_format(mcq):
-    choices = [
-        {
-            "content": opt,
-            "correct": i == mcq["answer_index"]
-        } for i, opt in enumerate(mcq["options"])
-    ]
-
-    radio_widget_dynamic = {
-        "type": "radio",
-        "alignment": "default",
-        "static": False,
-        "graded": True,
-        "options": {
-            "choices": choices,
-            "randomize": True,
-            "multipleSelect": False,
-            "displayCount": None,
-            "hasNoneOfTheAbove": False,
-            "onePerLine": True,
-            "deselectEnabled": False
-        },
-        "version": {
-            "major": 1,
-            "minor": 0
-        }
-    }
-
-    radio_widget_static = {
-        "type": "radio",
-        "alignment": "default",
-        "static": True,
-        "graded": True,
-        "options": {
-            "choices": choices,
-            "randomize": False,
-            "multipleSelect": False,
-            "displayCount": None,
-            "hasNoneOfTheAbove": False,
-            "onePerLine": True,
-            "deselectEnabled": False
-        },
-        "version": {
-            "major": 1,
-            "minor": 0
-        }
-    }
-
+    options = [{"content": opt, "correct": i == mcq["answer_index"]} for i, opt in enumerate(mcq["options"])]
+    
     return {
         "question": {
-            "content": mcq["question"] + "\n\n[[☃ radio 1]]",
+            "content": f"{mcq['question']}\n\n[[☃ radio 1]]",
             "images": {},
             "widgets": {
-                "radio 1": radio_widget_dynamic
+                "radio 1": {
+                    "type": "radio",
+                    "alignment": "default",
+                    "static": False,
+                    "graded": True,
+                    "options": {
+                        "choices": options,
+                        "randomize": True,
+                        "multipleSelect": False,
+                        "displayCount": None,
+                        "hasNoneOfTheAbove": False,
+                        "onePerLine": True,
+                        "deselectEnabled": False
+                    },
+                    "version": {
+                        "major": 1,
+                        "minor": 0
+                    }
+                }
             }
         },
         "answerArea": {
@@ -124,7 +97,25 @@ def to_perseus_format(mcq):
                 "content": "The correct answer is:\n\n[[☃ radio 1]]",
                 "images": {},
                 "widgets": {
-                    "radio 1": radio_widget_static
+                    "radio 1": {
+                        "type": "radio",
+                        "alignment": "default",
+                        "static": True,
+                        "graded": True,
+                        "options": {
+                            "choices": options,
+                            "randomize": False,
+                            "multipleSelect": False,
+                            "displayCount": None,
+                            "hasNoneOfTheAbove": False,
+                            "onePerLine": True,
+                            "deselectEnabled": False
+                        },
+                        "version": {
+                            "major": 1,
+                            "minor": 0
+                        }
+                    }
                 }
             }
         ]
@@ -134,7 +125,7 @@ if uploaded_files:
     all_mcqs = []
 
     for img in uploaded_files:
-        st.image(img, caption=img.name, use_container_width=True)
+        st.image(img, caption=img.name, use_column_width=True)
         with st.spinner(f"Extracting MCQs from {img.name}..."):
             raw_json = extract_json_mcqs_from_image(img.read())
 
@@ -157,7 +148,12 @@ if uploaded_files:
         perseus_json = json.dumps(perseus_output, indent=2)
         st.text_area("📋 Perseus JSON", perseus_json, height=300)
 
-        st.download_button("📘 Download Perseus JSON", data=perseus_json, file_name="perseus_mcqs.json", mime="application/json")
+        st.download_button(
+            "📘 Download Perseus JSON", 
+            data=perseus_json, 
+            file_name="perseus_mcqs.json", 
+            mime="application/json"
+        )
 
         doc = Document()
         doc.add_heading("MCQs", 0)
@@ -170,7 +166,12 @@ if uploaded_files:
         buf = BytesIO()
         doc.save(buf)
         buf.seek(0)
-        st.download_button("📝 Download Word Doc", data=buf, file_name="mcqs.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        st.download_button(
+            "📝 Download Word Doc", 
+            data=buf, 
+            file_name="mcqs.docx", 
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
 
         if st.button("✨ Generate Similar Questions"):
             st.subheader("🧠 Similar Questions")
