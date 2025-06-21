@@ -10,7 +10,11 @@ openai.api_key = st.secrets["OPENAI_API_KEY"]
 st.title("🧠 MCQ Extractor (Perseus Style) from Multiple Images")
 st.write("Upload multiple images with MCQs. Get results in structured JSON format like Perseus uses.")
 
-uploaded_files = st.file_uploader("Upload image(s) with MCQs", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+uploaded_files = st.file_uploader(
+    "Upload image(s) with MCQs", 
+    type=["jpg", "jpeg", "png"], 
+    accept_multiple_files=True
+)
 
 def extract_json_mcqs_from_image(image_bytes):
     base64_image = base64.b64encode(image_bytes).decode("utf-8")
@@ -22,7 +26,13 @@ def extract_json_mcqs_from_image(image_bytes):
                 "content": [
                     {
                         "type": "text",
-                        "text": "Extract all multiple choice questions (MCQs) from this image in the following JSON format:\n\n[\n  {\n    \"question\": \"...\",\n    \"options\": [\"...\", \"...\", \"...\", \"...\"],\n    \"answer_index\": 1\n  },\n  ...\n]"
+                        "text": (
+                            "Extract all multiple choice questions (MCQs) from this image. "
+                            "Respond with ONLY valid JSON in the format below and nothing else:\n\n"
+                            "[\n  {\n    \"question\": \"...\",\n    "
+                            "\"options\": [\"...\", \"...\", \"...\", \"...\"],\n    "
+                            "\"answer_index\": 1\n  }\n]"
+                        )
                     },
                     {
                         "type": "image_url",
@@ -37,22 +47,24 @@ def extract_json_mcqs_from_image(image_bytes):
 
 if uploaded_files:
     all_mcqs = []
+    raw_outputs = []
 
     for img in uploaded_files:
         st.image(img, caption=img.name, use_container_width=True)
         with st.spinner(f"Extracting MCQs from {img.name}..."):
             raw_json = extract_json_mcqs_from_image(img.read())
+            raw_outputs.append((img.name, raw_json))
             try:
                 mcqs = json.loads(raw_json)
                 all_mcqs.extend(mcqs)
-            except:
-                st.error(f"Could not parse output from {img.name} as JSON.")
-                st.text_area("Raw Output", raw_json)
+            except json.JSONDecodeError:
+                st.warning(f"⚠️ {img.name} returned non-JSON output. It will be shown below.")
+
+    st.subheader("🧾 Final Output (Combined from All Images)")
 
     if all_mcqs:
-        st.subheader("🧾 Extracted MCQs in Perseus JSON Format")
         formatted = json.dumps(all_mcqs, indent=2)
-        st.text_area("Structured Output", formatted, height=400)
+        st.text_area("📋 Structured Perseus JSON", formatted, height=400)
 
         st.download_button(
             label="📄 Download JSON",
@@ -61,14 +73,13 @@ if uploaded_files:
             mime="application/json"
         )
 
-        # Optional Word document too
         doc = Document()
         doc.add_heading("MCQs Extracted in Perseus Format", 0)
         for q in all_mcqs:
             doc.add_paragraph(f"Q: {q['question']}")
             for i, opt in enumerate(q["options"]):
-                prefix = "(Correct)" if i == q["answer_index"] else ""
-                doc.add_paragraph(f"  - {opt} {prefix}")
+                prefix = " ✅" if i == q["answer_index"] else ""
+                doc.add_paragraph(f"  - {opt}{prefix}")
             doc.add_paragraph("")
         buffer = BytesIO()
         doc.save(buffer)
@@ -80,3 +91,9 @@ if uploaded_files:
             file_name="mcqs_perseus.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
+    else:
+        st.warning("❗ No structured MCQs could be parsed. Check raw output below.")
+
+    st.subheader("🧾 Raw Outputs (Unparsed)")
+    for filename, raw in raw_outputs:
+        st.text_area(f"🖼 Raw output from {filename}", raw, height=200)
