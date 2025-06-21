@@ -8,7 +8,7 @@ from docx import Document
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 
 st.title("📘 MCQ Extractor & Generator (Perseus Format)")
-st.write("Upload image(s) containing multiple choice questions, or add your own. Get Perseus-formatted output.")
+st.write("Upload image(s) containing multiple choice questions, or add your own. Get Perseus-formatted output (one JSON per question).")
 
 uploaded_files = st.file_uploader("Upload MCQ images", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
@@ -64,7 +64,6 @@ def extract_json_mcqs_from_image(image_bytes):
 
 def to_perseus_format(mcq):
     options = [{"content": opt, "correct": i == mcq["answer_index"]} for i, opt in enumerate(mcq["options"])]
-    # Custom hints if available
     hints = []
     hint1 = mcq.get("hint1", "").strip()
     hint2 = mcq.get("hint2", "").strip()
@@ -190,18 +189,25 @@ for m in st.session_state.get("manual_mcqs", []):
     })
 
 if all_combined_mcqs:
-    st.subheader("✅ Perseus-Formatted MCQs")
-    perseus_output = [to_perseus_format(q) for q in all_combined_mcqs]
-    perseus_json = json.dumps(perseus_output, indent=2, ensure_ascii=False)
-    st.text_area("📋 Perseus JSON", perseus_json, height=300)
+    st.subheader("✅ Perseus-Formatted MCQs (Individual JSON Objects)")
 
+    perseus_output = [to_perseus_format(q) for q in all_combined_mcqs]
+
+    # Show each as a standalone JSON object (for copy-paste)
+    for idx, obj in enumerate(perseus_output, 1):
+        st.markdown(f"**MCQ {idx} Perseus JSON:**")
+        st.code(json.dumps(obj, indent=2, ensure_ascii=False), language="json")
+
+    # Download all as single text file, with each JSON object separated by two newlines
+    perseus_json_text = "\n\n".join(json.dumps(obj, indent=2, ensure_ascii=False) for obj in perseus_output)
     st.download_button(
-        "📘 Download Perseus JSON",
-        data=perseus_json,
-        file_name="perseus_mcqs.json",
-        mime="application/json"
+        "📘 Download All MCQs (each as separate JSON object)",
+        data=perseus_json_text,
+        file_name="perseus_mcqs.txt",
+        mime="text/plain"
     )
 
+    # Optionally, download as docx (for teacher review)
     doc = Document()
     doc.add_heading("MCQs", 0)
     for q in all_combined_mcqs:
@@ -219,30 +225,3 @@ if all_combined_mcqs:
         file_name="mcqs.docx",
         mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
-
-    if st.button("✨ Generate Similar Questions"):
-        st.subheader("🧠 Similar Questions")
-        for q in all_combined_mcqs:
-            prompt = (
-                f"Given this MCQ:\nQ: {q['question']}\nOptions: {q['options']}\n\n"
-                "Generate 1-2 new MCQs that assess the same concept. Format:\n"
-                "[{\"question\": \"...\", \"options\": [...], \"answer_index\": ...}]"
-            )
-            try:
-                res = openai.chat.completions.create(
-                    model="gpt-4o",
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=300
-                )
-                output = res.choices[0].message.content.strip()
-                if output.startswith("```json"):
-                    output = output.removeprefix("```json").strip().removesuffix("```").strip()
-                new_mcqs = json.loads(output)
-                for nq in new_mcqs:
-                    st.markdown(f"**Q: {nq['question']}**")
-                    for i, opt in enumerate(nq["options"]):
-                        prefix = "✅ " if i == nq["answer_index"] else "- "
-                        st.markdown(f"{prefix}{opt}")
-                    st.markdown("---")
-            except:
-                st.warning(f"❗ Could not generate variation for: {q['question']}")
