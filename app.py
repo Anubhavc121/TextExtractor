@@ -54,8 +54,16 @@ if uploaded_files:
         with st.spinner(f"Extracting MCQs from {img.name}..."):
             raw_json = extract_json_mcqs_from_image(img.read())
             raw_outputs.append((img.name, raw_json))
+
+            # Clean GPT markdown formatting
+            cleaned = raw_json.strip()
+            if cleaned.startswith("```json"):
+                cleaned = cleaned.removeprefix("```json").strip()
+            if cleaned.endswith("```"):
+                cleaned = cleaned.removesuffix("```").strip()
+
             try:
-                mcqs = json.loads(raw_json)
+                mcqs = json.loads(cleaned)
                 all_mcqs.extend(mcqs)
             except json.JSONDecodeError:
                 st.warning(f"⚠️ {img.name} returned non-JSON output. It will be shown below.")
