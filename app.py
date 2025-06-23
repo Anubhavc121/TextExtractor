@@ -157,6 +157,38 @@ def to_perseus_format(mcq):
         "hints": hints
     }
 
+# --- SIMILAR QUESTION GENERATOR FUNCTION ---
+def generate_similar_mcqs(question_text, options):
+    # Remove Perseus widget tags and extract just the main question
+    base_question = question_text.split("[[")[0].strip()
+    option_texts = [opt["content"] if isinstance(opt, dict) else str(opt) for opt in options]
+    prompt = (
+        f"Generate 3 similar multiple choice questions (MCQs) based on the style and topic of the following question.\n"
+        f"Original Question: {base_question}\n"
+        f"Options: {option_texts}\n"
+        f"Each MCQ should be in this JSON format:\n"
+        '[{"question": "...", "options": ["...", "...", "...", "..."], "answer_index": 1}]\n'
+        f"Only respond with a JSON array."
+    )
+    try:
+        response = openai.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1000,
+            temperature=0.7,
+        )
+        content = response.choices[0].message.content.strip()
+        if content.startswith("```json"):
+            content = content.removeprefix("```json").strip()
+        if content.endswith("```"):
+            content = content.removesuffix("```").strip()
+        return json.loads(content)
+    except Exception as e:
+        st.warning(f"Error generating similar questions: {e}")
+        return []
+
+# --- MAIN MCQ EXTRACTION/AGGREGATION LOGIC ---
+
 all_mcqs = []
 
 if uploaded_files:
@@ -193,10 +225,24 @@ if all_combined_mcqs:
 
     perseus_output = [to_perseus_format(q) for q in all_combined_mcqs]
 
-    # Show each as a standalone JSON object (for copy-paste)
+    # Show each as a standalone JSON object (for copy-paste), with similar question button
     for idx, obj in enumerate(perseus_output, 1):
         st.markdown(f"**MCQ {idx} Perseus JSON:**")
         st.code(json.dumps(obj, indent=2, ensure_ascii=False), language="json")
+
+        # --- Generate Similar Questions Button ---
+        if st.button(f"🌀 Generate Similar to MCQ {idx}", key=f"gen_sim_{idx}"):
+            with st.spinner("Generating similar questions..."):
+                original_question = obj["question"]["content"]
+                options = obj["question"]["widgets"]["radio 1"]["options"]["choices"]
+                similar_mcqs = generate_similar_mcqs(original_question, options)
+                if similar_mcqs:
+                    for sim_idx, sim_mcq in enumerate(similar_mcqs, 1):
+                        perseus_sim = to_perseus_format(sim_mcq)
+                        st.markdown(f"**Similar MCQ {sim_idx}:**")
+                        st.code(json.dumps(perseus_sim, indent=2, ensure_ascii=False), language="json")
+                else:
+                    st.warning("No similar questions generated.")
 
     # Download all as single text file, with each JSON object separated by two newlines
     perseus_json_text = "\n\n".join(json.dumps(obj, indent=2, ensure_ascii=False) for obj in perseus_output)
