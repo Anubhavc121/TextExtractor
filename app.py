@@ -2,59 +2,50 @@ import streamlit as st
 import openai
 import base64
 import json
+import requests
+from ast import literal_eval
 from io import BytesIO
 from docx import Document
 
+# Setup API keys from secrets
 openai.api_key = st.secrets["OPENAI_API_KEY"]
+AVETI_API_TOKEN = st.secrets["AVETI_API_TOKEN"]
 
-st.title("📘 MCQ Extractor & Generator (Perseus Format)")
-st.write("Upload image(s) containing multiple choice questions, or add your own. Get Perseus-formatted output (one JSON per question).")
+# API configuration
+api_url = "https://production.mobile.avetilearning.com/service/cms/api/v1/exercise/74995/questions"
+headers = {
+    "Authorization": f"Bearer {AVETI_API_TOKEN}",
+    "Content-Type": "application/json"
+}
 
-uploaded_files = st.file_uploader("Upload MCQ images", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+st.title("🧠 MCQ Extractor (Perseus Style) from Multiple Images")
+st.write("Upload multiple images with MCQs. Get results in structured JSON format like Perseus uses.")
+debug = st.sidebar.checkbox("🔍 Show raw JSON from OpenAI")
 
-# --- MANUAL MCQ ENTRY IN SIDEBAR ---
-st.sidebar.title("Add MCQ Manually")
-if "manual_mcqs" not in st.session_state:
-    st.session_state.manual_mcqs = []
-
-with st.sidebar.form("manual_mcq_form"):
-    manual_q = st.text_input("Question text")
-    n_opt = st.number_input("Number of options", 2, 8, value=4)
-    manual_opts = [st.text_input(f"Option {i+1}") for i in range(n_opt)]
-    manual_ans = st.number_input("Correct option number (1-based)", 1, n_opt, value=1)
-    manual_hint1 = st.text_input("Hint 1 (optional)", "")
-    manual_hint2 = st.text_input("Hint 2 (optional)", "")
-    add_btn = st.form_submit_button("➕ Add MCQ")
-    if add_btn and manual_q and all(manual_opts):
-        st.session_state.manual_mcqs.append({
-            "question": manual_q,
-            "options": manual_opts,
-            "answer_index": manual_ans - 1,
-            "hint1": manual_hint1,
-            "hint2": manual_hint2
-        })
-        st.sidebar.success("MCQ added!")
+uploaded_files = st.file_uploader(
+    "Upload image(s) with MCQs", 
+    type=["jpg", "jpeg", "png"], 
+    accept_multiple_files=True
+)
 
 def extract_json_mcqs_from_image(image_bytes):
     base64_image = base64.b64encode(image_bytes).decode("utf-8")
+    prompt = (
+        "Extract **ALL** multiple choice questions (MCQs) from this image, even if they are partially visible or unclear. "
+        "Do not skip any question. For each question, if an option or answer is unreadable, include a placeholder such as 'Unclear'. "
+        "Respond with ONLY valid JSON in this format (one list of objects):\n\n"
+        "[{\"question\": \"...\", \"options\": [\"...\", \"...\", \"...\", \"...\"], \"answer_index\": 1}]\n\n"
+        "Do NOT include markdown, explanation, or any extra text. No ```json blocks. Only plain JSON."
+    )
     response = openai.chat.completions.create(
         model="gpt-4o",
+        temperature=0,
         messages=[
             {
                 "role": "user",
                 "content": [
-                    {
-                        "type": "text",
-                        "text": (
-                            "Extract all multiple choice questions (MCQs) from this image. "
-                            "Respond with ONLY valid JSON in this format:\n\n"
-                            "[{\"question\": \"...\", \"options\": [\"...\", \"...\", \"...\", \"...\"], \"answer_index\": 1}]"
-                        )
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
-                    }
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
                 ]
             }
         ],
@@ -62,212 +53,150 @@ def extract_json_mcqs_from_image(image_bytes):
     )
     return response.choices[0].message.content
 
-def to_perseus_format(mcq):
-    options = [{"content": opt, "correct": i == mcq["answer_index"]} for i, opt in enumerate(mcq["options"])]
-    hints = []
-    hint1 = mcq.get("hint1", "").strip()
-    hint2 = mcq.get("hint2", "").strip()
-    if hint1:
-        hints.append({"replace": False, "content": hint1, "images": {}, "widgets": {}})
-    if hint2:
-        hints.append({"replace": False, "content": hint2, "images": {}, "widgets": {}})
-    if not hints:
-        # default hints
-        hints = [
-            {
-                "replace": False,
-                "content": "Hint 1: Consider the social system of Hinduism at the time.",
-                "images": {},
-                "widgets": {}
-            },
-            {
-                "replace": False,
-                "content": "Hint 2: Buddhism did not follow a rigid caste structure.",
-                "images": {},
-                "widgets": {}
-            }
-        ]
-    # Always add answer reveal hint
-    hints.append(
-        {
-            "replace": False,
-            "content": "The correct answer is:\n\n[[☃ radio 1]]",
-            "images": {},
-            "widgets": {
-                "radio 1": {
-                    "type": "radio",
-                    "alignment": "default",
-                    "static": True,
-                    "graded": True,
-                    "options": {
-                        "choices": options,
-                        "randomize": False,
-                        "multipleSelect": False,
-                        "displayCount": None,
-                        "hasNoneOfTheAbove": False,
-                        "onePerLine": True,
-                        "deselectEnabled": False
-                    },
-                    "version": {
-                        "major": 1,
-                        "minor": 0
-                    }
-                }
-            }
-        }
-    )
-
-    return {
-        "question": {
-            "content": f"{mcq['question']}\n\n[[☃ radio 1]]",
-            "images": {},
-            "widgets": {
-                "radio 1": {
-                    "type": "radio",
-                    "alignment": "default",
-                    "static": False,
-                    "graded": True,
-                    "options": {
-                        "choices": options,
-                        "randomize": True,
-                        "multipleSelect": False,
-                        "displayCount": None,
-                        "hasNoneOfTheAbove": False,
-                        "onePerLine": True,
-                        "deselectEnabled": False
-                    },
-                    "version": {
-                        "major": 1,
-                        "minor": 0
-                    }
-                }
-            }
-        },
-        "answerArea": {
-            "calculator": False,
-            "chi2Table": False,
-            "periodicTable": False,
-            "tTable": False,
-            "zTable": False
-        },
-        "itemDataVersion": {
-            "major": 0,
-            "minor": 1
-        },
-        "hints": hints
-    }
-
-# --- SIMILAR QUESTION GENERATOR FUNCTION ---
-def generate_similar_mcqs(question_text, options):
-    # Remove Perseus widget tags and extract just the main question
-    base_question = question_text.split("[[")[0].strip()
-    option_texts = [opt["content"] if isinstance(opt, dict) else str(opt) for opt in options]
-    prompt = (
-        f"Generate 3 similar multiple choice questions (MCQs) based on the style and topic of the following question.\n"
-        f"Original Question: {base_question}\n"
-        f"Options: {option_texts}\n"
-        f"Each MCQ should be in this JSON format:\n"
-        '[{"question": "...", "options": ["...", "...", "...", "..."], "answer_index": 1}]\n'
-        f"Only respond with a JSON array."
-    )
+def send_mcq_to_api(mcq):
     try:
-        response = openai.chat.completions.create(
-            model="gpt-4o",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=1000,
-            temperature=0.7,
-        )
-        content = response.choices[0].message.content.strip()
-        if content.startswith("```json"):
-            content = content.removeprefix("```json").strip()
-        if content.endswith("```"):
-            content = content.removesuffix("```").strip()
-        return json.loads(content)
+        payload = {
+            "question": {
+                "content": mcq["question"] + "\n\n[[☃ radio 1]]",
+                "images": {},
+                "widgets": {
+                    "radio 1": {
+                        "type": "radio",
+                        "alignment": "default",
+                        "static": False,
+                        "graded": True,
+                        "options": {
+                            "choices": [
+                                {"content": opt, "correct": (i == mcq["answer_index"])}
+                                for i, opt in enumerate(mcq["options"])
+                            ],
+                            "randomize": True,
+                            "multipleSelect": False,
+                            "displayCount": None,
+                            "hasNoneOfTheAbove": False,
+                            "onePerLine": True,
+                            "deselectEnabled": False
+                        },
+                        "version": {"major": 1, "minor": 0}
+                    }
+                }
+            },
+            "answerArea": {
+                "calculator": False,
+                "chi2Table": False,
+                "periodicTable": False,
+                "tTable": False,
+                "zTable": False
+            },
+            "itemDataVersion": {
+                "major": 0,
+                "minor": 1
+            },
+            "hints": [
+                {
+                    "replace": False,
+                    "content": "Hint 1: Think carefully.",
+                    "images": {},
+                    "widgets": {}
+                },
+                {
+                    "replace": False,
+                    "content": "The correct answer is:\n\n[[☃ radio 1]]",
+                    "images": {},
+                    "widgets": {
+                        "radio 1": {
+                            "type": "radio",
+                            "alignment": "default",
+                            "static": True,
+                            "graded": True,
+                            "options": {
+                                "choices": [
+                                    {"content": opt, "correct": (i == mcq["answer_index"])}
+                                    for i, opt in enumerate(mcq["options"])
+                                ],
+                                "randomize": False,
+                                "multipleSelect": False,
+                                "displayCount": None,
+                                "hasNoneOfTheAbove": False,
+                                "onePerLine": True,
+                                "deselectEnabled": False
+                            },
+                            "version": {"major": 1, "minor": 0}
+                        }
+                    }
+                }
+            ]
+        }
+        response = requests.post(api_url, headers=headers, json=payload)
+        return response.status_code, response.text, payload
     except Exception as e:
-        st.warning(f"Error generating similar questions: {e}")
-        return []
-
-# --- MAIN MCQ EXTRACTION/AGGREGATION LOGIC ---
-
-all_mcqs = []
+        return 500, str(e), {}
 
 if uploaded_files:
+    all_mcqs = []
+    raw_outputs = []
+
     for img in uploaded_files:
         st.image(img, caption=img.name, use_container_width=True)
         with st.spinner(f"Extracting MCQs from {img.name}..."):
             raw_json = extract_json_mcqs_from_image(img.read())
+            raw_outputs.append((img.name, raw_json))
 
-            cleaned = raw_json.strip()
-            if cleaned.startswith("```json"):
-                cleaned = cleaned.removeprefix("```json").strip()
-            if cleaned.endswith("```"):
-                cleaned = cleaned.removesuffix("```").strip()
+            if debug:
+                st.text_area(f"🧾 Raw Output from {img.name}", raw_json, height=150)
+
+            if raw_json.strip().startswith("```json"):
+                raw_json = raw_json.strip().removeprefix("```json").removesuffix("```").strip()
 
             try:
-                mcqs = json.loads(cleaned)
-                all_mcqs.extend(mcqs)
+                mcqs = json.loads(raw_json)
             except json.JSONDecodeError:
-                st.warning(f"⚠️ Could not parse output from {img.name}")
+                st.warning(f"⚠️ {img.name} returned invalid JSON. Trying fallback parser...")
+                try:
+                    mcqs = literal_eval(raw_json)
+                except Exception as e:
+                    mcqs = []
+                    st.error(f"❌ Could not parse fallback for {img.name}: {e}")
 
-# Combine image MCQs and manual MCQs
-all_combined_mcqs = all_mcqs.copy()
-for m in st.session_state.get("manual_mcqs", []):
-    all_combined_mcqs.append({
-        "question": m["question"],
-        "options": m["options"],
-        "answer_index": m["answer_index"],
-        "hint1": m["hint1"],
-        "hint2": m["hint2"]
-    })
+            if mcqs:
+                for i, mcq in enumerate(mcqs, start=1):
+                    status, resp, sent_payload = send_mcq_to_api(mcq)
+                    if status in [200, 201]:
+                        st.success(f"✅ Question {i} sent successfully.")
+                        st.markdown("**Payload sent:**")
+                        st.code(json.dumps(sent_payload, indent=2), language="json")
+                        st.markdown(f"**Server response:** `{resp}`")
+                    else:
+                        st.error(f"❌ Failed to send Question {i}")
+                        st.markdown("**Payload attempted:**")
+                        st.code(json.dumps(sent_payload, indent=2), language="json")
+                        st.markdown(f"**Error response:** `{resp}`")
+                all_mcqs.extend(mcqs)
+            else:
+                st.warning(f"⚠️ No valid MCQs could be parsed from {img.name}")
 
-if all_combined_mcqs:
-    st.subheader("✅ Perseus-Formatted MCQs (Individual JSON Objects)")
+    st.subheader("🧾 Final Output (Combined from All Images)")
+    if all_mcqs:
+        formatted = json.dumps(all_mcqs, indent=2)
+        st.text_area("📋 Structured Perseus JSON", formatted, height=400)
+        st.download_button("📄 Download JSON", data=formatted, file_name="perseus_mcqs.json", mime="application/json")
 
-    perseus_output = [to_perseus_format(q) for q in all_combined_mcqs]
+        doc = Document()
+        doc.add_heading("MCQs Extracted in Perseus Format", 0)
+        for q in all_mcqs:
+            doc.add_paragraph(f"Q: {q['question']}")
+            for i, opt in enumerate(q["options"]):
+                prefix = " ✅" if i == q["answer_index"] else ""
+                doc.add_paragraph(f"  - {opt}{prefix}")
+            doc.add_paragraph("")
+        buffer = BytesIO()
+        doc.save(buffer)
+        buffer.seek(0)
+        st.download_button("📄 Download as Word Document", data=buffer, file_name="mcqs_perseus.docx",
+                           mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    else:
+        st.warning("❗ No structured MCQs could be parsed. Check raw output below.")
 
-    # Show each as a standalone JSON object (for copy-paste), with similar question button
-    for idx, obj in enumerate(perseus_output, 1):
-        st.markdown(f"**MCQ {idx} Perseus JSON:**")
-        st.code(json.dumps(obj, indent=2, ensure_ascii=False), language="json")
-
-        # --- Generate Similar Questions Button ---
-        if st.button(f"🌀 Generate Similar to MCQ {idx}", key=f"gen_sim_{idx}"):
-            with st.spinner("Generating similar questions..."):
-                original_question = obj["question"]["content"]
-                options = obj["question"]["widgets"]["radio 1"]["options"]["choices"]
-                similar_mcqs = generate_similar_mcqs(original_question, options)
-                if similar_mcqs:
-                    for sim_idx, sim_mcq in enumerate(similar_mcqs, 1):
-                        perseus_sim = to_perseus_format(sim_mcq)
-                        st.markdown(f"**Similar MCQ {sim_idx}:**")
-                        st.code(json.dumps(perseus_sim, indent=2, ensure_ascii=False), language="json")
-                else:
-                    st.warning("No similar questions generated.")
-
-    # Download all as single text file, with each JSON object separated by two newlines
-    perseus_json_text = "\n\n".join(json.dumps(obj, indent=2, ensure_ascii=False) for obj in perseus_output)
-    st.download_button(
-        "📘 Download All MCQs (each as separate JSON object)",
-        data=perseus_json_text,
-        file_name="perseus_mcqs.txt",
-        mime="text/plain"
-    )
-
-    # Optionally, download as docx (for teacher review)
-    doc = Document()
-    doc.add_heading("MCQs", 0)
-    for q in all_combined_mcqs:
-        doc.add_paragraph(f"Q: {q['question']}")
-        for i, opt in enumerate(q['options']):
-            prefix = "✅ " if i == q["answer_index"] else "- "
-            doc.add_paragraph(f"{prefix}{opt}")
-        doc.add_paragraph()
-    buf = BytesIO()
-    doc.save(buf)
-    buf.seek(0)
-    st.download_button(
-        "📝 Download Word Doc",
-        data=buf,
-        file_name="mcqs.docx",
-        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    )
+    st.subheader("🧾 Raw Outputs (Unparsed)")
+    for filename, raw in raw_outputs:
+        st.text_area(f"🖼 Raw output from {filename}", raw, height=200)
