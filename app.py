@@ -12,7 +12,7 @@ openai.api_key = st.secrets["OPENAI_API_KEY"]
 AVETI_API_TOKEN = st.secrets["AVETI_API_TOKEN"]
 
 # API configuration
-api_url = "https://production.mobile.avetilearning.com/service/cms/api/v1/exercise/74995/questions"
+api_url = "https://production.mobile.avetilearning.com/service/cms/api/v1/exercise/75020/questions"
 headers = {
     "Authorization": f"Bearer {AVETI_API_TOKEN}",
     "Content-Type": "application/json"
