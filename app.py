@@ -127,7 +127,9 @@ def send_mcq_to_api(mcq):
                 }
             ]
         }
-        response = requests.post(api_url, headers=headers, json=payload)
+
+        # ✅ FIX: Wrap in `question_json` as required by the API
+        response = requests.post(api_url, headers=headers, json={"question_json": payload})
         return response.status_code, response.text, payload
     except Exception as e:
         return 500, str(e), {}
