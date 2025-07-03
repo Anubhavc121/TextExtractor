@@ -11,8 +11,14 @@ from docx import Document
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 AVETI_API_TOKEN = st.secrets["AVETI_API_TOKEN"]
 
-# API configuration
-api_url = "https://production.mobile.avetilearning.com/service/cms/api/v1/exercise/75020/questions"
+# Sidebar: API URL selection
+st.sidebar.markdown("### 🔗 API Configuration")
+api_url = st.sidebar.text_input(
+    "Enter API endpoint to send questions",
+    value="https://production.mobile.avetilearning.com/service/cms/api/v1/exercise/74995/questions",
+    help="Paste the full URL where the MCQs should be submitted"
+)
+
 headers = {
     "Authorization": f"Bearer {AVETI_API_TOKEN}",
     "Content-Type": "application/json"
@@ -57,7 +63,7 @@ def send_mcq_to_api(mcq):
     try:
         payload = {
             "question": {
-                "content": mcq["question"] + "\n\n[[☃ radio 1]]",
+                "content": mcq["question"] + "\n\n[[radio 1]]",
                 "images": {},
                 "widgets": {
                     "radio 1": {
