@@ -37,11 +37,20 @@ uploaded_files = st.file_uploader(
 def extract_json_mcqs_from_image(image_bytes):
     base64_image = base64.b64encode(image_bytes).decode("utf-8")
     prompt = (
-        "Extract **ALL** multiple choice questions (MCQs) from this image, even if they are partially visible or unclear. "
-        "Do not skip any question. For each question, if an option or answer is unreadable, include a placeholder such as 'Unclear'. "
-        "Respond with ONLY valid JSON in this format (one list of objects):\n\n"
-        "[{\"question\": \"...\", \"options\": [\"...\", \"...\", \"...\", \"...\"], \"answer_index\": 1}]\n\n"
-        "Do NOT include markdown, explanation, or any extra text. No ```json blocks. Only plain JSON."
+        "Extract ALL visible multiple choice questions (MCQs) from this image. "
+    "Do NOT skip any questions. "
+    "Some questions may be 'match the column' style — for those, preserve both List-I and List-II clearly in the question content. "
+    "Also copy the answer choices exactly as shown (like '(a)', '(b)', etc.). "
+    "Use this output format:\n\n"
+    "[\n"
+    "  {\n"
+    "    \"question\": \"Match List-I with List-II...\\nList-I: A. 1556 B. 1600 ...\\nList-II: 1. Battle ...\\nCodes: (a)... (b)...\",\n"
+    "    \"options\": [\"(a) A-3 B-4 C-2 D-1\", \"(b) A-5 B-4 C-3 D-2\", \"(c) A-5 B-2 C-1 D-4\", \"(d) A-1 B-5 C-3 D-2\"],\n"
+    "    \"answer_index\": 1\n"
+    "  }\n"
+    "]\n\n"
+    "If the correct answer is not visible or unclear, set `answer_index` to null.\n"
+    "Only output plain JSON. Do NOT use markdown. Do NOT include explanations or hints."
     )
     response = openai.chat.completions.create(
         model="gpt-4o",
