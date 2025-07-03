@@ -57,7 +57,7 @@ def send_mcq_to_api(mcq):
     try:
         payload = {
             "question": {
-                "content": mcq["question"] + "\n\n[[radio 1]]",
+                "content": mcq["question"] + "\n\n[[☃ radio 1]]",
                 "images": {},
                 "widgets": {
                     "radio 1": {
