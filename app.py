@@ -167,10 +167,17 @@ if uploaded_files:
                         st.code(json.dumps(sent_payload, indent=2), language="json")
                         st.markdown(f"**Server response:** `{resp}`")
                     else:
-                        st.error(f"❌ Failed to send Question {i}")
+                        st.error(f"❌ Failed to send Question {i} (Status Code: {status})")
                         st.markdown("**Payload attempted:**")
                         st.code(json.dumps(sent_payload, indent=2), language="json")
-                        st.markdown(f"**Error response:** `{resp}`")
+                        try:
+                            error_json = json.loads(resp)
+                            st.markdown("**Error details from API:**")
+                            st.code(json.dumps(error_json, indent=2), language="json")
+                        except:
+                            st.markdown("**Raw error response:**")
+                            st.code(resp, language="text")
+                        print(f"[ERROR] Status {status} | Response: {resp}")
                 all_mcqs.extend(mcqs)
             else:
                 st.warning(f"⚠️ No valid MCQs could be parsed from {img.name}")
