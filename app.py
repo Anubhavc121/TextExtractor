@@ -39,26 +39,25 @@ def extract_json_mcqs_from_image(image_bytes):
    prompt = """
 Extract ALL multiple choice questions (MCQs) from this image. Do NOT skip any question, even if partially visible or formatted unusually.
 
-📌 Format:
+➡️ Special instructions:
+- If the question has multiple statements, match-the-following, or columns (List-I, List-II), preserve their structure using line breaks (\\n).
+- Copy options exactly as they appear, including option labels like (a), (b), (c), (d).
+- For map/image-based or diagram questions, include a marker like "[IMAGE-BASED QUESTION ABOVE]" in the question text.
+- For assertion-reasoning or chronological-type questions, maintain their format exactly as printed.
+- If the correct answer is unclear, set `"answer_index": null`.
+
+➡️ Return only valid JSON in this format:
 [
   {
-    "question": "Full question without numbering (no Q1., Q23. etc.)",
+    "question": "Full question content including lists or image description",
     "options": ["(a) ...", "(b) ...", "(c) ...", "(d) ..."],
-    "answer_index": 0  // or null if answer is unclear
+    "answer_index": 1
   }
 ]
 
-📌 Special instructions:
-- Remove any leading question numbers like "27.", "Q28.", "33.", etc.
-- Do NOT include "Question:", "Options:" or explanation lines.
-- For Match-the-List or Assertion-Reasoning questions, preserve line breaks and format exactly.
-- Include everything up to the options — exactly how it is written (just without the question number).
-- Copy all options exactly with (a)/(b)/(c)/(d).
-- If the correct answer is not visible, set "answer_index" to null.
-- Return plain JSON only — no markdown, no ``` blocks, no comments.
-
-Only return a valid JSON array as per the structure above.
+⚠️ Do NOT include markdown, explanations, hints, comments, or ```json blocks. Just plain JSON array.
 """
+
 
 
     response = openai.chat.completions.create(
