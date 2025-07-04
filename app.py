@@ -36,22 +36,28 @@ uploaded_files = st.file_uploader(
 
 def extract_json_mcqs_from_image(image_bytes):
     base64_image = base64.b64encode(image_bytes).decode("utf-8")
-    prompt = (
-        "Extract ALL visible multiple choice questions (MCQs) from this image. "
-    "Do NOT skip any questions. "
-    "Some questions may be 'match the column' style — for those, preserve both List-I and List-II clearly in the question content. "
-    "Also copy the answer choices exactly as shown (like '(a)', '(b)', etc.). "
-    "Use this output format:\n\n"
-    "[\n"
-    "  {\n"
-    "    \"question\": \"Match List-I with List-II...\\nList-I: A. 1556 B. 1600 ...\\nList-II: 1. Battle ...\\nCodes: (a)... (b)...\",\n"
-    "    \"options\": [\"(a) A-3 B-4 C-2 D-1\", \"(b) A-5 B-4 C-3 D-2\", \"(c) A-5 B-2 C-1 D-4\", \"(d) A-1 B-5 C-3 D-2\"],\n"
-    "    \"answer_index\": 1\n"
-    "  }\n"
-    "]\n\n"
-    "If the correct answer is not visible or unclear, set `answer_index` to null.\n"
-    "Only output plain JSON. Do NOT use markdown. Do NOT include explanations or hints."
-    )
+    prompt = """
+Extract ALL multiple choice questions (MCQs) from this image. Do NOT skip any question, even if partially visible or formatted unusually.
+
+➡️ Special instructions:
+- If the question has multiple statements, match-the-following, or columns (List-I, List-II), preserve their structure using line breaks (\\n).
+- Copy options exactly as they appear, including option labels like (a), (b), (c), (d).
+- For map/image-based or diagram questions, include a marker like "[IMAGE-BASED QUESTION ABOVE]" in the question text.
+- For assertion-reasoning or chronological-type questions, maintain their format exactly as printed.
+- If the correct answer is unclear, set `"answer_index": null`.
+
+➡️ Return only valid JSON in this format:
+[
+  {
+    "question": "Full question content including lists or image description",
+    "options": ["(a) ...", "(b) ...", "(c) ...", "(d) ..."],
+    "answer_index": 1
+  }
+]
+
+⚠️ Do NOT include markdown, explanations, hints, comments, or ```json blocks. Just plain JSON array.
+"""
+
     response = openai.chat.completions.create(
         model="gpt-4o",
         temperature=0,
