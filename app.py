@@ -4,36 +4,41 @@ import base64
 import json
 import requests
 
-# Setup API keys from Streamlit secrets
+# Load secrets
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 AVETI_API_TOKEN = st.secrets["AVETI_API_TOKEN"]
 
-# API configuration
-api_url = "https://production.mobile.avetilearning.com/service/cms/api/v1/exercise/74995/questions"
-headers = {
-    "Authorization": f"Bearer {AVETI_API_TOKEN}",
-    "Content-Type": "application/json"
-}
+# App header
+st.title("🧠 MCQ Extractor (Perseus Format)")
+st.write("Upload image(s) containing MCQs and send them in the correct format to Aveti.")
 
-# UI Setup
-st.title("🧠 MCQ Extractor (Perseus Style) from Multiple Images")
-st.write("Upload images with MCQs. Get structured JSON. Auto-push to Aveti.")
 debug = st.sidebar.checkbox("🔍 Show raw and final JSON")
 
+# Input exercise ID
+exercise_id = st.text_input("Enter Exercise ID:", value="74995")
+if not exercise_id.strip().isdigit():
+    st.error("❌ Please enter a valid numeric Exercise ID.")
+    st.stop()
+
+# Construct API URL
+api_url = f"https://production.mobile.avetilearning.com/service/cms/api/v1/exercise/{exercise_id}/questions"
+
+# Upload image(s)
 uploaded_files = st.file_uploader(
     "📷 Upload MCQ image(s)", 
     type=["jpg", "jpeg", "png"], 
     accept_multiple_files=True
 )
 
-# Step 1: Extract JSON from image using GPT-4o Vision
+# Step 1: Extract MCQs from image using OpenAI
 def extract_json_mcqs_from_image(image_bytes):
     base64_image = base64.b64encode(image_bytes).decode("utf-8")
     prompt = (
-        "Extract ALL multiple choice questions (MCQs) from this image, even if partially visible. "
-        "Use this exact JSON format:\n\n"
+        "Extract ALL multiple choice questions (MCQs) from this image. "
+        "If something is unclear, use placeholder text. "
+        "Return only valid JSON in this format:\n\n"
         "[{\"question\": \"...\", \"options\": [\"...\", \"...\", \"...\", \"...\"], \"answer_index\": 1}]\n\n"
-        "No explanations. No markdown. No ```json. Only plain JSON list."
+        "Do not include explanations or markdown. Only plain JSON."
     )
 
     response = openai.chat.completions.create(
@@ -52,19 +57,18 @@ def extract_json_mcqs_from_image(image_bytes):
     )
 
     raw_output = response.choices[0].message.content
+
     if debug:
         st.subheader("🧾 Raw OpenAI Output")
-        st.text_area("OpenAI JSON (as string)", raw_output, height=300)
+        st.text_area("Raw JSON from OpenAI", raw_output, height=300)
 
     try:
-        parsed = json.loads(raw_output)
-        return parsed
+        return json.loads(raw_output)
     except json.JSONDecodeError as e:
-        st.error(f"❌ JSON parsing failed: {e}")
-        st.text_area("Raw content with issue", raw_output)
+        st.error(f"❌ Failed to parse OpenAI JSON: {e}")
         return []
 
-# Step 2: Send each MCQ to Aveti API
+# Step 2: Send a single MCQ to Aveti
 def send_mcq_to_api(mcq):
     try:
         choices = [
@@ -86,11 +90,15 @@ def send_mcq_to_api(mcq):
                             "choices": choices,
                             "randomize": True,
                             "multipleSelect": False,
+                            "displayCount": None,
                             "hasNoneOfTheAbove": False,
                             "onePerLine": True,
                             "deselectEnabled": False
                         },
-                        "version": {"major": 1, "minor": 0}
+                        "version": {
+                            "major": 1,
+                            "minor": 0
+                        }
                     }
                 }
             },
@@ -108,7 +116,13 @@ def send_mcq_to_api(mcq):
             "hints": [
                 {
                     "replace": False,
-                    "content": "Hint 1: Think carefully.",
+                    "content": "Hint 1: Consider the social system of Hinduism at the time.",
+                    "images": {},
+                    "widgets": {}
+                },
+                {
+                    "replace": False,
+                    "content": "Hint 2: Buddhism did not follow a rigid caste structure.",
                     "images": {},
                     "widgets": {}
                 },
@@ -121,16 +135,20 @@ def send_mcq_to_api(mcq):
                             "type": "radio",
                             "alignment": "default",
                             "static": True,
-                            "graded": False,  # Important: No grading in hint
+                            "graded": True,
                             "options": {
                                 "choices": choices,
                                 "randomize": False,
                                 "multipleSelect": False,
+                                "displayCount": None,
                                 "hasNoneOfTheAbove": False,
                                 "onePerLine": True,
                                 "deselectEnabled": False
                             },
-                            "version": {"major": 1, "minor": 0}
+                            "version": {
+                                "major": 1,
+                                "minor": 0
+                            }
                         }
                     }
                 }
@@ -138,23 +156,27 @@ def send_mcq_to_api(mcq):
         }
 
         if debug:
-            st.subheader("📦 Payload Sent to API")
+            st.subheader("📦 Final Payload Sent to API")
             st.json(payload)
 
-        response = requests.post(api_url, headers=headers, data=json.dumps(payload))
+        response = requests.post(api_url, headers={
+            "Authorization": f"Bearer {AVETI_API_TOKEN}",
+            "Content-Type": "application/json"
+        }, data=json.dumps(payload))
+
         if response.status_code == 200:
             st.success(f"✅ Uploaded: {mcq['question'][:60]}...")
         else:
-            st.error(f"❌ Status {response.status_code}")
+            st.error(f"❌ Upload failed: Status {response.status_code}")
             try:
                 st.json(response.json())
             except:
                 st.text(response.text)
 
     except Exception as e:
-        st.error(f"⚠️ Error: {e}")
+        st.error(f"⚠️ Error while sending: {e}")
 
-# Step 3: Loop over each uploaded image and process
+# Step 3: Process each uploaded image
 if uploaded_files:
     for file in uploaded_files:
         st.subheader(f"📷 Processing: {file.name}")
@@ -170,4 +192,4 @@ if uploaded_files:
                     st.write(f"{prefix} {opt}")
                 send_mcq_to_api(mcq)
         else:
-            st.warning("⚠️ No MCQs extracted or invalid format.")
+            st.warning("⚠️ No MCQs extracted or JSON format is invalid.")
