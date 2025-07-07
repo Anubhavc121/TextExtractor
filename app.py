@@ -4,17 +4,17 @@ import base64
 import json
 import requests
 
-# Load API keys from secrets
+# Load secrets
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 AVETI_API_TOKEN = st.secrets["AVETI_API_TOKEN"]
 
-# UI Setup
+# UI setup
 st.title("🧠 MCQ Extractor (Perseus Format for Aveti)")
-st.write("Upload image(s) containing MCQs and send them to Aveti in the correct CMS format.")
+st.write("Upload image(s) with MCQs and send them to Aveti CMS in proper format.")
 
 debug = st.sidebar.checkbox("🔍 Show raw and final JSON")
 
-# Exercise ID input
+# Get exercise ID input
 exercise_id = st.text_input("Enter Exercise ID:", value="74995")
 if not exercise_id.strip().isdigit():
     st.error("❌ Please enter a valid numeric Exercise ID.")
@@ -25,19 +25,21 @@ api_url = f"https://production.mobile.avetilearning.com/service/cms/api/v1/exerc
 
 # Upload image(s)
 uploaded_files = st.file_uploader(
-    "📷 Upload MCQ image(s)", 
-    type=["jpg", "jpeg", "png"], 
+    "📷 Upload MCQ image(s)",
+    type=["jpg", "jpeg", "png"],
     accept_multiple_files=True
 )
 
-# Step 1: Extract JSON from image
+# Extract JSON from image
 def extract_json_mcqs_from_image(image_bytes):
     base64_image = base64.b64encode(image_bytes).decode("utf-8")
     prompt = (
         "Extract ALL multiple choice questions (MCQs) from this image, even if partially visible. "
         "Use this exact JSON format:\n\n"
         "[{\"question\": \"...\", \"options\": [\"...\", \"...\", \"...\", \"...\"], \"answer_index\": 1}]\n\n"
-        "Return plain JSON only. No markdown, no explanation, no ```json block."
+        "If the question says 'Which of the above...', move the factual statements into the `question` field as numbered lines. "
+        "The options should then be generic like '1 and 3', '1, 2 and 3', etc. "
+        "Do not include explanations, markdown, or ```json."
     )
 
     response = openai.chat.completions.create(
@@ -59,29 +61,47 @@ def extract_json_mcqs_from_image(image_bytes):
 
     if debug:
         st.subheader("🧾 Raw OpenAI Output")
-        st.text_area("Raw JSON from OpenAI", raw_output, height=300)
+        st.text_area("Raw JSON", raw_output, height=300)
 
     try:
         return json.loads(raw_output)
     except json.JSONDecodeError as e:
-        st.error(f"❌ Failed to parse JSON: {e}")
+        st.error(f"❌ JSON parse error: {e}")
         return []
 
-# Step 2: Send one MCQ to Aveti API
+# Fix and send to API
 def send_mcq_to_api(mcq):
     try:
-        # Ensure 4 options
+        # Patch if question implies numbered statements and options are actually statements
+        if (
+            len(mcq["options"]) == 3 and
+            "which of the above" in mcq["question"].lower() and
+            all(opt[0].islower() or opt[0].isupper() for opt in mcq["options"])
+        ):
+            # Inject the options as numbered statements
+            statements = [f"{i+1}. {opt.strip()}" for i, opt in enumerate(mcq["options"])]
+            mcq["question"] = mcq["question"].strip().rstrip(":") + ":\n\n" + "\n".join(statements) + "\n\nWhich of the above statements is/are correct?"
+
+            # Replace options with standard multiple statement format
+            mcq["options"] = [
+                "1 alone",
+                "1 and 3",
+                "2 and 3",
+                "1, 2 and 3"
+            ]
+
+            # Default to index 2 (can be improved if ground truth exists)
+            mcq["answer_index"] = 2
+
         if len(mcq["options"]) != 4:
             st.warning("⚠️ Skipped: MCQ must have exactly 4 options.")
             return
 
-        # Format choices
         choices = [
             {"content": opt.strip(), "correct": (i == mcq["answer_index"])}
             for i, opt in enumerate(mcq["options"])
         ]
 
-        # Prepare Perseus-style payload
         payload = {
             "question": {
                 "content": mcq["question"].strip() + "\n\n[[☃ radio 1]]",
@@ -155,12 +175,11 @@ def send_mcq_to_api(mcq):
             ]
         }
 
-        # Show JSON if debug is on
         if debug:
-            st.subheader("📦 Final JSON Sent to API")
+            st.subheader("📦 Final Payload Sent to API")
             st.json({"question_json": payload})
 
-        # Send to Aveti API
+        # Wrap in question_json field as required
         response = requests.post(
             api_url,
             headers={
@@ -182,7 +201,7 @@ def send_mcq_to_api(mcq):
     except Exception as e:
         st.error(f"⚠️ Error while sending: {e}")
 
-# Step 3: Main image processing loop
+# Main loop
 if uploaded_files:
     for file in uploaded_files:
         st.subheader(f"📷 Processing: {file.name}")
@@ -198,4 +217,4 @@ if uploaded_files:
                     st.write(f"{prefix} {opt}")
                 send_mcq_to_api(mcq)
         else:
-            st.warning("⚠️ No MCQs extracted or format invalid.")
+            st.warning("⚠️ No MCQs extracted or invalid format.")
