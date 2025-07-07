@@ -178,3 +178,28 @@ def send_mcq_to_api(mcq):
             st.success(f"✅ Uploaded: {mcq['question'][:60]}...")
         else:
             st.error(f"❌ Upload failed: {response.status_code}")
+            try:
+                st.json(response.json())
+            except:
+                st.text(response.text)
+
+    except Exception as e:
+        st.error(f"⚠️ Error while sending: {e}")
+
+# Main Loop
+if uploaded_files:
+    for file in uploaded_files:
+        st.subheader(f"📷 Processing: {file.name}")
+        image_bytes = file.read()
+        mcqs = extract_json_mcqs_from_image(image_bytes)
+
+        if isinstance(mcqs, list):
+            for idx, mcq in enumerate(mcqs):
+                st.markdown(f"### Q{idx + 1}")
+                st.write(mcq["question"])
+                for i, opt in enumerate(mcq["options"]):
+                    prefix = "✅" if i == mcq["answer_index"] else "🔘"
+                    st.write(f"{prefix} {opt}")
+                send_mcq_to_api(mcq)
+        else:
+            st.warning("⚠️ No MCQs extracted or format invalid.")
