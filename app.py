@@ -4,85 +4,64 @@ import base64
 import json
 import requests
 import pandas as pd
-from io import BytesIO
-from typing import Dict
 
-# Load secrets
+# Load API keys from secrets
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 AVETI_API_TOKEN = st.secrets["AVETI_API_TOKEN"]
 
-# UI
-st.title("📦 Bulk MCQ Uploader to Aveti")
-st.write("Upload a `.csv` with exercise_id and image_filename, and all images.")
+# UI setup
+st.title("📦 Bulk MCQ Uploader with Preview")
+st.write("Upload a `.csv` with `exercise_id,image_filename` and matching image files.")
 
-csv_file = st.file_uploader("📄 Upload CSV file (exercise_id, image_filename)", type=["csv"])
-image_files = st.file_uploader("🖼️ Upload all image files listed in the CSV", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
-
+csv_file = st.file_uploader("📄 Upload CSV", type=["csv"])
+image_files = st.file_uploader("🖼️ Upload images listed in the CSV", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 debug = st.sidebar.checkbox("🔍 Show raw OpenAI JSON")
 
-# Cache images by filename
+# Map filenames to bytes
 def map_uploaded_images(files):
-    image_map = {}
-    for file in files:
-        image_map[file.name] = file.read()
-    return image_map
+    return {file.name: file.read() for file in files}
 
-# Extract MCQs from image using GPT-4o
+# Extract MCQs from image
 def extract_mcqs_from_image(image_bytes):
     base64_image = base64.b64encode(image_bytes).decode("utf-8")
     prompt = (
-        "Extract ALL multiple choice questions (MCQs) from this image, even if partially visible. "
-        "Return valid JSON only, in this format:\n\n"
-        "[{\"question\": \"...\", \"options\": [\"...\", \"...\", \"...\", \"...\"], \"answer_index\": 1}]\n\n"
-        "If the question includes statements, use numbered lines inside the question using newlines. Do not add any explanation or markdown."
+        "Extract ALL multiple choice questions (MCQs) from this image. "
+        "Return a plain JSON list like:\n"
+        "[{\"question\": \"...\", \"options\": [\"...\", \"...\", \"...\", \"...\"], \"answer_index\": 1}]"
     )
     response = openai.chat.completions.create(
-        model="gpt-4o",
-        temperature=0,
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-                ]
-            }
-        ],
+        model="gpt-4o", temperature=0,
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+            ]
+        }],
         max_tokens=2000
     )
-
-    raw_output = response.choices[0].message.content
+    raw = response.choices[0].message.content
     if debug:
-        st.subheader("🧾 Raw OpenAI Output")
-        st.text_area("Raw JSON", raw_output, height=300)
-
+        st.subheader("🧾 Raw Output")
+        st.text_area("Raw JSON", raw, height=300)
     try:
-        return json.loads(raw_output)
-    except json.JSONDecodeError as e:
-        st.error(f"❌ JSON parse error: {e}")
+        return json.loads(raw)
+    except json.JSONDecodeError:
         return []
 
-# Smart formatting for question content
-def format_question_content(text):
+# Format question (uses <br> if numbered)
+def format_question(text):
     lines = text.strip().split("\n")
     if any(line.strip().startswith(str(i)) for i, line in enumerate(lines, start=1)):
         return "<br>".join(lines) + "<br><br>[[☃ radio 1]]"
-    else:
-        return text.strip() + "\n\n[[☃ radio 1]]"
+    return text.strip() + "\n\n[[☃ radio 1]]"
 
-# Submit MCQ to Aveti
-def submit_mcq(mcq, exercise_id):
-    api_url = f"https://production.mobile.avetilearning.com/service/cms/api/v1/exercise/{exercise_id}/questions"
-
-    question_content = format_question_content(mcq["question"])
-    choices = [
-        {"content": opt.strip(), "correct": (i == mcq["answer_index"])}
-        for i, opt in enumerate(mcq["options"])
-    ]
-
-    payload = {
+# Build full payload
+def build_payload(mcq, formatted_question):
+    choices = [{"content": opt.strip(), "correct": (i == mcq["answer_index"])} for i, opt in enumerate(mcq["options"])]
+    return {
         "question": {
-            "content": question_content,
+            "content": formatted_question,
             "images": {},
             "widgets": {
                 "radio 1": {
@@ -104,11 +83,8 @@ def submit_mcq(mcq, exercise_id):
             }
         },
         "answerArea": {
-            "calculator": False,
-            "chi2Table": False,
-            "periodicTable": False,
-            "tTable": False,
-            "zTable": False
+            "calculator": False, "chi2Table": False,
+            "periodicTable": False, "tTable": False, "zTable": False
         },
         "itemDataVersion": {"major": 0, "minor": 1},
         "hints": [
@@ -140,50 +116,77 @@ def submit_mcq(mcq, exercise_id):
         ]
     }
 
+# Submit to Aveti
+def submit_to_api(payload, exercise_id):
+    url = f"https://production.mobile.avetilearning.com/service/cms/api/v1/exercise/{exercise_id}/questions"
     response = requests.post(
-        api_url,
-        headers={
-            "Authorization": f"Bearer {AVETI_API_TOKEN}",
-            "Content-Type": "application/json"
-        },
+        url,
+        headers={"Authorization": f"Bearer {AVETI_API_TOKEN}", "Content-Type": "application/json"},
         data=json.dumps({"question_json": payload})
     )
-    return response.status_code == 200, response
+    return response.status_code == 200, response.status_code
 
-# Bulk processor
+# === Main Logic ===
 if csv_file and image_files:
     df = pd.read_csv(csv_file)
     image_map = map_uploaded_images(image_files)
-    results = []
+
+    preview_data = []
 
     for _, row in df.iterrows():
-        exercise_id = str(row["exercise_id"]).strip()
-        image_name = row["image_filename"].strip()
+        ex_id = str(row["exercise_id"]).strip()
+        img_name = row["image_filename"].strip()
 
-        if image_name not in image_map:
-            results.append((exercise_id, image_name, "❌ Image not uploaded"))
+        if img_name not in image_map:
+            preview_data.append({"exercise_id": ex_id, "image": img_name, "status": "❌ Image not uploaded", "mcqs": []})
             continue
 
-        image_bytes = image_map[image_name]
+        image_bytes = image_map[img_name]
         mcqs = extract_mcqs_from_image(image_bytes)
 
         if not isinstance(mcqs, list):
-            results.append((exercise_id, image_name, "❌ Extraction failed"))
+            preview_data.append({"exercise_id": ex_id, "image": img_name, "status": "❌ Extraction failed", "mcqs": []})
             continue
 
-        success_all = True
-        for mcq in mcqs:
-            if len(mcq.get("options", [])) != 4:
-                results.append((exercise_id, image_name, "⚠️ Skipped: Invalid MCQ format"))
-                success_all = False
-                continue
-            success, response = submit_mcq(mcq, exercise_id)
-            if not success:
-                success_all = False
-                results.append((exercise_id, image_name, f"❌ API error: {response.status_code}"))
-        if success_all:
-            results.append((exercise_id, image_name, "✅ All MCQs uploaded"))
+        preview_data.append({
+            "exercise_id": ex_id,
+            "image": img_name,
+            "status": "🕵️ Ready",
+            "mcqs": mcqs
+        })
 
-    # Show final result
-    st.subheader("📊 Upload Summary")
-    st.table(pd.DataFrame(results, columns=["Exercise ID", "Image", "Status"]))
+    # === Preview Section ===
+    st.subheader("👁️ Preview Extracted MCQs")
+    for entry in preview_data:
+        st.markdown(f"---\n#### 📘 Exercise: {entry['exercise_id']} | 🖼️ Image: {entry['image']}")
+        st.write(f"**Status:** {entry['status']}")
+        for idx, mcq in enumerate(entry["mcqs"]):
+            st.markdown(f"**Q{idx+1}:** {mcq['question']}")
+            for i, opt in enumerate(mcq["options"]):
+                prefix = "✅" if i == mcq["answer_index"] else "🔘"
+                st.markdown(f"- {prefix} {opt}")
+
+    # === Confirm Upload Button ===
+    if st.button("🚀 Upload All to CMS"):
+        st.subheader("📊 Upload Summary")
+        results = []
+        for entry in preview_data:
+            if not entry["mcqs"]:
+                results.append((entry["exercise_id"], entry["image"], entry["status"]))
+                continue
+
+            all_success = True
+            for mcq in entry["mcqs"]:
+                if len(mcq["options"]) != 4:
+                    results.append((entry["exercise_id"], entry["image"], "⚠️ Invalid MCQ format"))
+                    all_success = False
+                    continue
+                payload = build_payload(mcq, format_question(mcq["question"]))
+                success, status_code = submit_to_api(payload, entry["exercise_id"])
+                if not success:
+                    all_success = False
+                    results.append((entry["exercise_id"], entry["image"], f"❌ API error: {status_code}"))
+            if all_success:
+                results.append((entry["exercise_id"], entry["image"], "✅ Uploaded"))
+
+        st.table(pd.DataFrame(results, columns=["Exercise ID", "Image", "Status"]))
