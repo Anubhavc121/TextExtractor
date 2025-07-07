@@ -8,7 +8,7 @@ import requests
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 AVETI_API_TOKEN = st.secrets["AVETI_API_TOKEN"]
 
-# UI Setup
+# UI setup
 st.title("🧠 MCQ Extractor (CMS-Ready Format)")
 st.write("Upload MCQ image(s) and send clean JSON to Aveti in Perseus format.")
 
@@ -34,8 +34,8 @@ def extract_json_mcqs_from_image(image_bytes):
         "Extract ALL multiple choice questions (MCQs) from this image, even if partially visible. "
         "Format in JSON as:\n\n"
         "[{\"question\": \"...\", \"options\": [\"...\", \"...\", \"...\", \"...\"], \"answer_index\": 1}]\n\n"
-        "If the question includes statements (like 'Consider the following...'), number them inside the `question` using newlines."
-        "Use plain JSON only. No markdown, no explanation, no ```json."
+        "If the question includes statements (like 'Consider the following...'), number them inside the `question` using newlines. "
+        "Do not include explanations, markdown, or ```json."
     )
 
     response = openai.chat.completions.create(
@@ -64,15 +64,24 @@ def extract_json_mcqs_from_image(image_bytes):
         st.error(f"❌ JSON parse error: {e}")
         return []
 
-# Send to API
+# Send to Aveti API
 def send_mcq_to_api(mcq):
     try:
         if len(mcq["options"]) != 4:
             st.warning("⚠️ Skipped: MCQ must have exactly 4 options.")
             return
 
-        # Convert newlines to <br> for proper CMS formatting
-        mcq["question"] = mcq["question"].strip().replace("\n", "<br>")
+        question_text = mcq["question"].strip()
+
+        # 🧠 Intelligent line break formatting:
+        has_numbered_statements = any(
+            line.strip().startswith(str(i)) for i, line in enumerate(question_text.split("\n"), start=1)
+        )
+
+        if has_numbered_statements:
+            formatted_question = question_text.replace("\n", "<br>") + "<br><br>[[☃ radio 1]]"
+        else:
+            formatted_question = question_text + "\n\n[[☃ radio 1]]"
 
         choices = [
             {"content": opt.strip(), "correct": (i == mcq["answer_index"])}
@@ -81,7 +90,7 @@ def send_mcq_to_api(mcq):
 
         payload = {
             "question": {
-                "content": mcq["question"] + "<br><br>[[☃ radio 1]]",
+                "content": formatted_question,
                 "images": {},
                 "widgets": {
                     "radio 1": {
@@ -116,19 +125,19 @@ def send_mcq_to_api(mcq):
             "hints": [
                 {
                     "replace": False,
-                    "content": "Hint 1: Consider the time period of each event.",
+                    "content": "Hint 1: Think logically and carefully.",
                     "images": {},
                     "widgets": {}
                 },
                 {
                     "replace": False,
-                    "content": "Hint 2: Try to recall the correct timeline.",
+                    "content": "Hint 2: Eliminate clearly wrong answers first.",
                     "images": {},
                     "widgets": {}
                 },
                 {
                     "replace": False,
-                    "content": "The correct answer is:<br><br>[[☃ radio 1]]",
+                    "content": "The correct answer is:\n\n[[☃ radio 1]]",
                     "images": {},
                     "widgets": {
                         "radio 1": {
@@ -153,10 +162,9 @@ def send_mcq_to_api(mcq):
         }
 
         if debug:
-            st.subheader("📦 Final JSON Payload")
+            st.subheader("📦 Final Payload Sent to API")
             st.json({"question_json": payload})
 
-        # Send request to Aveti API
         response = requests.post(
             api_url,
             headers={
@@ -170,28 +178,3 @@ def send_mcq_to_api(mcq):
             st.success(f"✅ Uploaded: {mcq['question'][:60]}...")
         else:
             st.error(f"❌ Upload failed: {response.status_code}")
-            try:
-                st.json(response.json())
-            except:
-                st.text(response.text)
-
-    except Exception as e:
-        st.error(f"⚠️ Error while sending: {e}")
-
-# Main loop
-if uploaded_files:
-    for file in uploaded_files:
-        st.subheader(f"📷 Processing: {file.name}")
-        image_bytes = file.read()
-        mcqs = extract_json_mcqs_from_image(image_bytes)
-
-        if isinstance(mcqs, list):
-            for idx, mcq in enumerate(mcqs):
-                st.markdown(f"### Q{idx + 1}")
-                st.write(mcq["question"].replace("<br>", "\n"))
-                for i, opt in enumerate(mcq["options"]):
-                    prefix = "✅" if i == mcq["answer_index"] else "🔘"
-                    st.write(f"{prefix} {opt}")
-                send_mcq_to_api(mcq)
-        else:
-            st.warning("⚠️ No valid MCQs extracted from this image.")
