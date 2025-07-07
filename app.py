@@ -44,7 +44,7 @@ Extract ALL multiple choice questions (MCQs) from this image. Do NOT skip any qu
   {
     "question": "Full question without numbering (no Q1., Q23. etc.)",
     "options": ["(a) ...", "(b) ...", "(c) ...", "(d) ..."],
-    "answer_index": 0  // or null if answer is unclear
+    "answer_index": 1  
   }
 ]
 
@@ -54,7 +54,7 @@ Extract ALL multiple choice questions (MCQs) from this image. Do NOT skip any qu
 - For Match-the-List or Assertion-Reasoning questions, preserve line breaks and format exactly.
 - Include everything up to the options — exactly how it is written (just without the question number).
 - Copy all options exactly with (a)/(b)/(c)/(d).
-- If the correct answer is not visible, set "answer_index" to null.
+- For consider the following statements questions, print the statements in different lines.
 - Return plain JSON only — no markdown, no ``` blocks, no comments.
 
 Only return a valid JSON array as per the structure above.
