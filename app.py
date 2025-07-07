@@ -3,22 +3,13 @@ import openai
 import base64
 import json
 import requests
-from ast import literal_eval
-from io import BytesIO
-from docx import Document
 
 # Setup API keys from secrets
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 AVETI_API_TOKEN = st.secrets["AVETI_API_TOKEN"]
 
-# Sidebar: API URL selection
-st.sidebar.markdown("### 🔗 API Configuration")
-api_url = st.sidebar.text_input(
-    "Enter API endpoint to send questions",
-    value="https://production.mobile.avetilearning.com/service/cms/api/v1/exercise/74995/questions",
-    help="Paste the full URL where the MCQs should be submitted"
-)
-
+# API configuration
+api_url = "https://production.mobile.avetilearning.com/service/cms/api/v1/exercise/74995/questions"
 headers = {
     "Authorization": f"Bearer {AVETI_API_TOKEN}",
     "Content-Type": "application/json"
@@ -34,31 +25,16 @@ uploaded_files = st.file_uploader(
     accept_multiple_files=True
 )
 
+# Function to extract JSON from image
 def extract_json_mcqs_from_image(image_bytes):
     base64_image = base64.b64encode(image_bytes).decode("utf-8")
-    prompt = """
-Extract ALL multiple choice questions (MCQs) from this image. Do NOT skip any question, even if partially visible or formatted unusually.
-
-📌 Format:
-[
-  {
-    "question": "Full question without numbering (no Q1., Q23. etc.)",
-    "options": ["(a) ...", "(b) ...", "(c) ...", "(d) ..."],
-    "answer_index": 1  
-  }
-]
-
-📌 Special instructions:
-- Remove any leading question numbers like "27.", "Q28.", "33.", etc.
-- Do NOT include "Question:", "Options:" or explanation lines.
-- For Match-the-List or Assertion-Reasoning questions, preserve line breaks and format exactly.
-- Include everything up to the options — exactly how it is written (just without the question number).
-- Copy all options exactly with (a)/(b)/(c)/(d).
-- For consider the following statements questions, print the statements in different lines.
-- Return plain JSON only — no markdown, no ``` blocks, no comments.
-
-Only return a valid JSON array as per the structure above.
-"""
+    prompt = (
+        "Extract **ALL** multiple choice questions (MCQs) from this image, even if they are partially visible or unclear. "
+        "Do not skip any question. For each question, if an option or answer is unreadable, include a placeholder such as 'Unclear'. "
+        "Respond with ONLY valid JSON in this format (one list of objects):\n\n"
+        "[{\"question\": \"...\", \"options\": [\"...\", \"...\", \"...\", \"...\"], \"answer_index\": 1}]\n\n"
+        "Do NOT include markdown, explanation, or any extra text. No ```json blocks. Only plain JSON."
+    )
     response = openai.chat.completions.create(
         model="gpt-4o",
         temperature=0,
@@ -73,14 +49,31 @@ Only return a valid JSON array as per the structure above.
         ],
         max_tokens=2000
     )
-    return response.choices[0].message.content
 
+    raw_output = response.choices[0].message.content
 
+    if debug:
+        st.text_area("🧾 Raw OpenAI Output", raw_output, height=300)
+
+    try:
+        parsed_json = json.loads(raw_output)
+        return parsed_json
+    except json.JSONDecodeError as e:
+        st.error(f"❌ JSON decoding failed: {e}")
+        st.text_area("⚠️ Raw output", raw_output)
+        return []
+
+# Function to send each MCQ to Aveti API
 def send_mcq_to_api(mcq):
     try:
+        choices = [
+            {"content": opt, "correct": (i == mcq["answer_index"])}
+            for i, opt in enumerate(mcq["options"])
+        ]
+
         payload = {
             "question": {
-                "content": mcq["question"] + "\n\n[[radio 1]]",
+                "content": mcq["question"] + "\n\n[[☃ radio 1]]",  # <-- FIXED
                 "images": {},
                 "widgets": {
                     "radio 1": {
@@ -89,10 +82,7 @@ def send_mcq_to_api(mcq):
                         "static": False,
                         "graded": True,
                         "options": {
-                            "choices": [
-                                {"content": opt, "correct": (i == mcq["answer_index"])}
-                                for i, opt in enumerate(mcq["options"])
-                            ],
+                            "choices": choices,
                             "randomize": True,
                             "multipleSelect": False,
                             "displayCount": None,
@@ -124,7 +114,7 @@ def send_mcq_to_api(mcq):
                 },
                 {
                     "replace": False,
-                    "content": "The correct answer is:\n\n[[radio 1]]",
+                    "content": "The correct answer is:\n\n[[☃ radio 1]]",  # <-- FIXED
                     "images": {},
                     "widgets": {
                         "radio 1": {
@@ -133,10 +123,7 @@ def send_mcq_to_api(mcq):
                             "static": True,
                             "graded": True,
                             "options": {
-                                "choices": [
-                                    {"content": opt, "correct": (i == mcq["answer_index"])}
-                                    for i, opt in enumerate(mcq["options"])
-                                ],
+                                "choices": choices,
                                 "randomize": False,
                                 "multipleSelect": False,
                                 "displayCount": None,
@@ -151,84 +138,29 @@ def send_mcq_to_api(mcq):
             ]
         }
 
-        # ✅ FIX: Wrap in `question_json` as required by the API
-        response = requests.post(api_url, headers=headers, json={"question_json": payload})
-        return response.status_code, response.text, payload
+        response = requests.post(api_url, headers=headers, data=json.dumps(payload))
+        if response.status_code == 200:
+            st.success(f"✅ Uploaded: {mcq['question'][:60]}...")
+        else:
+            st.error(f"❌ Failed. Status code: {response.status_code}")
+            st.json(response.json())
     except Exception as e:
-        return 500, str(e), {}
+        st.error(f"⚠️ Error sending question: {e}")
 
+# Main logic
 if uploaded_files:
-    all_mcqs = []
-    raw_outputs = []
+    for file in uploaded_files:
+        st.subheader(f"📷 Processing: {file.name}")
+        image_bytes = file.read()
+        mcqs = extract_json_mcqs_from_image(image_bytes)
 
-    for img in uploaded_files:
-        st.image(img, caption=img.name, use_container_width=True)
-        with st.spinner(f"Extracting MCQs from {img.name}..."):
-            raw_json = extract_json_mcqs_from_image(img.read())
-            raw_outputs.append((img.name, raw_json))
-
-            if debug:
-                st.text_area(f"🧾 Raw Output from {img.name}", raw_json, height=150)
-
-            if raw_json.strip().startswith("```json"):
-                raw_json = raw_json.strip().removeprefix("```json").removesuffix("```").strip()
-
-            try:
-                mcqs = json.loads(raw_json)
-            except json.JSONDecodeError:
-                st.warning(f"⚠️ {img.name} returned invalid JSON. Trying fallback parser...")
-                try:
-                    mcqs = literal_eval(raw_json)
-                except Exception as e:
-                    mcqs = []
-                    st.error(f"❌ Could not parse fallback for {img.name}: {e}")
-
-            if mcqs:
-                for i, mcq in enumerate(mcqs, start=1):
-                    status, resp, sent_payload = send_mcq_to_api(mcq)
-                    if status in [200, 201]:
-                        st.success(f"✅ Question {i} sent successfully.")
-                        st.markdown("**Payload sent:**")
-                        st.code(json.dumps(sent_payload, indent=2), language="json")
-                        st.markdown(f"**Server response:** `{resp}`")
-                    else:
-                        st.error(f"❌ Failed to send Question {i} (Status Code: {status})")
-                        st.markdown("**Payload attempted:**")
-                        st.code(json.dumps(sent_payload, indent=2), language="json")
-                        try:
-                            error_json = json.loads(resp)
-                            st.markdown("**Error details from API:**")
-                            st.code(json.dumps(error_json, indent=2), language="json")
-                        except:
-                            st.markdown("**Raw error response:**")
-                            st.code(resp, language="text")
-                        print(f"[ERROR] Status {status} | Response: {resp}")
-                all_mcqs.extend(mcqs)
-            else:
-                st.warning(f"⚠️ No valid MCQs could be parsed from {img.name}")
-
-    st.subheader("🧾 Final Output (Combined from All Images)")
-    if all_mcqs:
-        formatted = json.dumps(all_mcqs, indent=2)
-        st.text_area("📋 Structured Perseus JSON", formatted, height=400)
-        st.download_button("📄 Download JSON", data=formatted, file_name="perseus_mcqs.json", mime="application/json")
-
-        doc = Document()
-        doc.add_heading("MCQs Extracted in Perseus Format", 0)
-        for q in all_mcqs:
-            doc.add_paragraph(f"Q: {q['question']}")
-            for i, opt in enumerate(q["options"]):
-                prefix = " ✅" if i == q["answer_index"] else ""
-                doc.add_paragraph(f"  - {opt}{prefix}")
-            doc.add_paragraph("")
-        buffer = BytesIO()
-        doc.save(buffer)
-        buffer.seek(0)
-        st.download_button("📄 Download as Word Document", data=buffer, file_name="mcqs_perseus.docx",
-                           mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-    else:
-        st.warning("❗ No structured MCQs could be parsed. Check raw output below.")
-
-    st.subheader("🧾 Raw Outputs (Unparsed)")
-    for filename, raw in raw_outputs:
-        st.text_area(f"🖼 Raw output from {filename}", raw, height=200)
+        if isinstance(mcqs, list):
+            for idx, mcq in enumerate(mcqs):
+                st.markdown(f"### Q{idx + 1}")
+                st.write(mcq["question"])
+                for i, opt in enumerate(mcq["options"]):
+                    prefix = "✅" if i == mcq["answer_index"] else "🔘"
+                    st.write(f"{prefix} {opt}")
+                send_mcq_to_api(mcq)
+        else:
+            st.error("⚠️ No MCQs extracted from this image.")
