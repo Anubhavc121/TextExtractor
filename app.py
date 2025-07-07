@@ -4,7 +4,7 @@ import base64
 import json
 import requests
 
-# Setup API keys from secrets
+# Setup API keys from Streamlit secrets
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 AVETI_API_TOKEN = st.secrets["AVETI_API_TOKEN"]
 
@@ -15,26 +15,27 @@ headers = {
     "Content-Type": "application/json"
 }
 
+# UI Setup
 st.title("🧠 MCQ Extractor (Perseus Style) from Multiple Images")
-st.write("Upload multiple images with MCQs. Get results in structured JSON format like Perseus uses.")
-debug = st.sidebar.checkbox("🔍 Show raw JSON from OpenAI")
+st.write("Upload images with MCQs. Get structured JSON. Auto-push to Aveti.")
+debug = st.sidebar.checkbox("🔍 Show raw and final JSON")
 
 uploaded_files = st.file_uploader(
-    "Upload image(s) with MCQs", 
+    "📷 Upload MCQ image(s)", 
     type=["jpg", "jpeg", "png"], 
     accept_multiple_files=True
 )
 
-# Function to extract JSON from image
+# Step 1: Extract JSON from image using GPT-4o Vision
 def extract_json_mcqs_from_image(image_bytes):
     base64_image = base64.b64encode(image_bytes).decode("utf-8")
     prompt = (
-        "Extract **ALL** multiple choice questions (MCQs) from this image, even if they are partially visible or unclear. "
-        "Do not skip any question. For each question, if an option or answer is unreadable, include a placeholder such as 'Unclear'. "
-        "Respond with ONLY valid JSON in this format (one list of objects):\n\n"
+        "Extract ALL multiple choice questions (MCQs) from this image, even if partially visible. "
+        "Use this exact JSON format:\n\n"
         "[{\"question\": \"...\", \"options\": [\"...\", \"...\", \"...\", \"...\"], \"answer_index\": 1}]\n\n"
-        "Do NOT include markdown, explanation, or any extra text. No ```json blocks. Only plain JSON."
+        "No explanations. No markdown. No ```json. Only plain JSON list."
     )
+
     response = openai.chat.completions.create(
         model="gpt-4o",
         temperature=0,
@@ -51,19 +52,19 @@ def extract_json_mcqs_from_image(image_bytes):
     )
 
     raw_output = response.choices[0].message.content
-
     if debug:
-        st.text_area("🧾 Raw OpenAI Output", raw_output, height=300)
+        st.subheader("🧾 Raw OpenAI Output")
+        st.text_area("OpenAI JSON (as string)", raw_output, height=300)
 
     try:
-        parsed_json = json.loads(raw_output)
-        return parsed_json
+        parsed = json.loads(raw_output)
+        return parsed
     except json.JSONDecodeError as e:
-        st.error(f"❌ JSON decoding failed: {e}")
-        st.text_area("⚠️ Raw output", raw_output)
+        st.error(f"❌ JSON parsing failed: {e}")
+        st.text_area("Raw content with issue", raw_output)
         return []
 
-# Function to send each MCQ to Aveti API
+# Step 2: Send each MCQ to Aveti API
 def send_mcq_to_api(mcq):
     try:
         choices = [
@@ -73,7 +74,7 @@ def send_mcq_to_api(mcq):
 
         payload = {
             "question": {
-                "content": mcq["question"] + "\n\n[[☃ radio 1]]",  # <-- FIXED
+                "content": mcq["question"] + "\n\n[[☃ radio 1]]",
                 "images": {},
                 "widgets": {
                     "radio 1": {
@@ -85,7 +86,6 @@ def send_mcq_to_api(mcq):
                             "choices": choices,
                             "randomize": True,
                             "multipleSelect": False,
-                            "displayCount": None,
                             "hasNoneOfTheAbove": False,
                             "onePerLine": True,
                             "deselectEnabled": False
@@ -114,19 +114,18 @@ def send_mcq_to_api(mcq):
                 },
                 {
                     "replace": False,
-                    "content": "The correct answer is:\n\n[[☃ radio 1]]",  # <-- FIXED
+                    "content": "The correct answer is:\n\n[[☃ radio 1]]",
                     "images": {},
                     "widgets": {
                         "radio 1": {
                             "type": "radio",
                             "alignment": "default",
                             "static": True,
-                            "graded": True,
+                            "graded": False,  # Important: No grading in hint
                             "options": {
                                 "choices": choices,
                                 "randomize": False,
                                 "multipleSelect": False,
-                                "displayCount": None,
                                 "hasNoneOfTheAbove": False,
                                 "onePerLine": True,
                                 "deselectEnabled": False
@@ -138,16 +137,24 @@ def send_mcq_to_api(mcq):
             ]
         }
 
+        if debug:
+            st.subheader("📦 Payload Sent to API")
+            st.json(payload)
+
         response = requests.post(api_url, headers=headers, data=json.dumps(payload))
         if response.status_code == 200:
             st.success(f"✅ Uploaded: {mcq['question'][:60]}...")
         else:
-            st.error(f"❌ Failed. Status code: {response.status_code}")
-            st.json(response.json())
-    except Exception as e:
-        st.error(f"⚠️ Error sending question: {e}")
+            st.error(f"❌ Status {response.status_code}")
+            try:
+                st.json(response.json())
+            except:
+                st.text(response.text)
 
-# Main logic
+    except Exception as e:
+        st.error(f"⚠️ Error: {e}")
+
+# Step 3: Loop over each uploaded image and process
 if uploaded_files:
     for file in uploaded_files:
         st.subheader(f"📷 Processing: {file.name}")
@@ -163,4 +170,4 @@ if uploaded_files:
                     st.write(f"{prefix} {opt}")
                 send_mcq_to_api(mcq)
         else:
-            st.error("⚠️ No MCQs extracted from this image.")
+            st.warning("⚠️ No MCQs extracted or invalid format.")
