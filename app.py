@@ -4,107 +4,102 @@ import base64
 import json
 import requests
 import pandas as pd
-from io import BytesIO
 
 # Load secrets
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 AVETI_API_TOKEN = st.secrets["AVETI_API_TOKEN"]
 
 # UI setup
-st.title("📦 Bulk MCQ Uploader with Preview")
-st.write("Upload a `.csv` with `exercise_id,image_filename` and matching image files.")
+st.title("🧠 MCQ Extractor (CMS-Ready Format from CSV)")
+st.write("Upload a CSV with Exercise IDs and filenames + the image files themselves.")
 
-csv_file = st.file_uploader("📄 Upload CSV", type=["csv"])
-image_files = st.file_uploader("🖼️ Upload images listed in the CSV", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
-debug = st.sidebar.checkbox("🔍 Show raw OpenAI JSON")
+debug = st.sidebar.checkbox("🔍 Show raw and final JSON")
 
-# Map filenames to bytes
-def map_uploaded_images(files):
-    return {file.name: BytesIO(file.read()).getvalue() for file in files}
+# CSV Upload
+csv_file = st.file_uploader("📄 Upload CSV (exercise_id, image_filename)", type=["csv"])
+uploaded_images = st.file_uploader("📷 Upload all image files", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
+
+if not csv_file or not uploaded_images:
+    st.stop()
+
+df = pd.read_csv(csv_file)
+image_map = {img.name: img for img in uploaded_images}
 
 # Extract MCQs from image
-def extract_mcqs_from_image(image_bytes):
+def extract_json_mcqs_from_image(image_bytes):
     base64_image = base64.b64encode(image_bytes).decode("utf-8")
     prompt = (
-        "Extract ALL multiple choice questions (MCQs) from this image. "
-        "Return a plain JSON list like:\n"
-        "[{\"question\": \"...\", \"options\": [\"...\", \"...\", \"...\", \"...\"], \"answer_index\": 1}]"
+        "Extract ALL multiple choice questions (MCQs) from this image, even if partially visible. "
+        "Format in JSON as:\n\n"
+        "[{\"question\": \"...\", \"options\": [\"...\", \"...\", \"...\", \"...\"], \"answer_index\": 1}]\n\n"
+        "If the question includes statements (like 'Consider the following...'), number them inside the `question` using newlines. "
+        "Do not include explanations, markdown, or ```json."
     )
+
     response = openai.chat.completions.create(
-        model="gpt-4o", temperature=0,
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
-            ]
-        }],
+        model="gpt-4o",
+        temperature=0,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}
+                ]
+            }
+        ],
         max_tokens=2000
     )
-    raw = response.choices[0].message.content
+
+    raw_output = response.choices[0].message.content
     if debug:
-        st.subheader("🧾 Raw Output")
-        st.text_area("Raw JSON", raw, height=300)
+        st.subheader("🧾 Raw OpenAI Output")
+        st.text_area("Raw JSON", raw_output, height=300)
+
     try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        st.error(f"❌ JSON parse error: {raw}")
+        return json.loads(raw_output)
+    except json.JSONDecodeError as e:
+        st.error(f"❌ JSON parse error: {e}")
         return []
 
-# Format question (uses <br> if numbered)
-def format_question(text):
-    lines = text.strip().split("\n")
-    if any(line.strip().startswith(str(i)) for i, line in enumerate(lines, start=1)):
-        return "<br>".join(lines) + "<br><br>[[☃ radio 1]]"
-    return text.strip() + "\n\n[[☃ radio 1]]"
+# Send to Aveti API
+def send_mcq_to_api(mcq, exercise_id):
+    api_url = f"https://production.mobile.avetilearning.com/service/cms/api/v1/exercise/{exercise_id}/questions"
 
-# Build full payload
-def build_payload(mcq, formatted_question):
-    choices = [{"content": opt.strip(), "correct": (i == mcq["answer_index"])} for i, opt in enumerate(mcq["options"])]
-    return {
-        "question": {
-            "content": formatted_question,
-            "images": {},
-            "widgets": {
-                "radio 1": {
-                    "type": "radio",
-                    "alignment": "default",
-                    "static": False,
-                    "graded": True,
-                    "options": {
-                        "choices": choices,
-                        "randomize": True,
-                        "multipleSelect": False,
-                        "displayCount": None,
-                        "hasNoneOfTheAbove": False,
-                        "onePerLine": True,
-                        "deselectEnabled": False
-                    },
-                    "version": {"major": 1, "minor": 0}
-                }
-            }
-        },
-        "answerArea": {
-            "calculator": False, "chi2Table": False,
-            "periodicTable": False, "tTable": False, "zTable": False
-        },
-        "itemDataVersion": {"major": 0, "minor": 1},
-        "hints": [
-            {"replace": False, "content": "Hint 1: Think logically and carefully.", "images": {}, "widgets": {}},
-            {"replace": False, "content": "Hint 2: Eliminate clearly wrong answers first.", "images": {}, "widgets": {}},
-            {
-                "replace": False,
-                "content": "The correct answer is:\n\n[[☃ radio 1]]",
+    try:
+        if len(mcq["options"]) != 4:
+            st.warning("⚠️ Skipped: MCQ must have exactly 4 options.")
+            return
+
+        question_text = mcq["question"].strip()
+
+        has_numbered_statements = any(
+            line.strip().startswith(str(i)) for i, line in enumerate(question_text.split("\n"), start=1)
+        )
+
+        if has_numbered_statements:
+            formatted_question = question_text.replace("\n", "<br>") + "<br><br>[[☃ radio 1]]"
+        else:
+            formatted_question = question_text + "\n\n[[☃ radio 1]]"
+
+        choices = [
+            {"content": opt.strip(), "correct": (i == mcq["answer_index"])}
+            for i, opt in enumerate(mcq["options"])
+        ]
+
+        payload = {
+            "question": {
+                "content": formatted_question,
                 "images": {},
                 "widgets": {
                     "radio 1": {
                         "type": "radio",
                         "alignment": "default",
-                        "static": True,
+                        "static": False,
                         "graded": True,
                         "options": {
                             "choices": choices,
-                            "randomize": False,
+                            "randomize": True,
                             "multipleSelect": False,
                             "displayCount": None,
                             "hasNoneOfTheAbove": False,
@@ -114,79 +109,106 @@ def build_payload(mcq, formatted_question):
                         "version": {"major": 1, "minor": 0}
                     }
                 }
-            }
-        ]
-    }
+            },
+            "answerArea": {
+                "calculator": False,
+                "chi2Table": False,
+                "periodicTable": False,
+                "tTable": False,
+                "zTable": False
+            },
+            "itemDataVersion": {
+                "major": 0,
+                "minor": 1
+            },
+            "hints": [
+                {
+                    "replace": False,
+                    "content": "Hint 1: Think logically and carefully.",
+                    "images": {},
+                    "widgets": {}
+                },
+                {
+                    "replace": False,
+                    "content": "Hint 2: Eliminate clearly wrong answers first.",
+                    "images": {},
+                    "widgets": {}
+                },
+                {
+                    "replace": False,
+                    "content": "The correct answer is:\n\n[[☃ radio 1]]",
+                    "images": {},
+                    "widgets": {
+                        "radio 1": {
+                            "type": "radio",
+                            "alignment": "default",
+                            "static": True,
+                            "graded": True,
+                            "options": {
+                                "choices": choices,
+                                "randomize": False,
+                                "multipleSelect": False,
+                                "displayCount": None,
+                                "hasNoneOfTheAbove": False,
+                                "onePerLine": True,
+                                "deselectEnabled": False
+                            },
+                            "version": {"major": 1, "minor": 0}
+                        }
+                    }
+                }
+            ]
+        }
 
-# Submit to Aveti
-def submit_to_api(payload, exercise_id):
-    url = f"https://production.mobile.avetilearning.com/service/cms/api/v1/exercise/{exercise_id}/questions"
-    response = requests.post(
-        url,
-        headers={"Authorization": f"Bearer {AVETI_API_TOKEN}", "Content-Type": "application/json"},
-        data=json.dumps({"question_json": payload})
-    )
-    if response.status_code == 200:
-        st.success(f"✅ Uploaded to {exercise_id}")
-    else:
-        st.error(f"❌ Failed for {exercise_id}: {response.status_code}")
-    return response.status_code == 200, response.status_code
+        if debug:
+            st.subheader("📦 Final Payload Sent to API")
+            st.json({"question_json": payload})
 
-# === Main Logic ===
-if csv_file and image_files:
-    df = pd.read_csv(csv_file)
-    df.columns = df.columns.str.strip()
-    st.write("📋 Columns Detected:", df.columns.tolist())
+        response = requests.post(
+            api_url,
+            headers={
+                "Authorization": f"Bearer {AVETI_API_TOKEN}",
+                "Content-Type": "application/json"
+            },
+            data=json.dumps({"question_json": payload})
+        )
 
-    image_map = map_uploaded_images(image_files)
-    preview_data = []
+        if response.status_code == 200:
+            st.success(f"✅ Uploaded: {mcq['question'][:60]}...")
+        else:
+            st.error(f"❌ Upload failed: {response.status_code}")
+            try:
+                st.json(response.json())
+            except:
+                st.text(response.text)
 
-    for _, row in df.iterrows():
-        ex_id = str(row.get("exercise_id", "")).strip()
-        img_name = row.get("image_filename", "").strip()
+    except Exception as e:
+        st.error(f"⚠️ Error while sending: {e}")
 
-        if not ex_id or not img_name:
-            preview_data.append({"exercise_id": ex_id, "image": img_name, "status": "❌ Missing fields", "mcqs": []})
-            continue
-        if img_name not in image_map:
-            preview_data.append({"exercise_id": ex_id, "image": img_name, "status": "❌ Image not uploaded", "mcqs": []})
-            continue
+# Main loop through CSV
+for _, row in df.iterrows():
+    exercise_id = str(row["exercise_id"]).strip()
+    image_filename = row["image_filename"].strip()
 
-        image_bytes = image_map[img_name]
-        mcqs = extract_mcqs_from_image(image_bytes)
-        st.write(f"📘 {len(mcqs)} question(s) extracted from {img_name}")
+    if not exercise_id.isdigit():
+        st.warning(f"❌ Skipped invalid exercise ID: {exercise_id}")
+        continue
 
-        if not isinstance(mcqs, list) or not mcqs:
-            preview_data.append({"exercise_id": ex_id, "image": img_name, "status": "❌ Extraction failed", "mcqs": []})
-            continue
+    if image_filename not in image_map:
+        st.warning(f"⚠️ Missing image file: {image_filename}")
+        continue
 
-        preview_data.append({"exercise_id": ex_id, "image": img_name, "status": "🕵️ Ready", "mcqs": mcqs})
+    st.subheader(f"📷 Processing: {image_filename} → Exercise ID {exercise_id}")
+    image_bytes = image_map[image_filename].read()
+    mcqs = extract_json_mcqs_from_image(image_bytes)
 
-    st.subheader("👁️ Preview Extracted MCQs")
-    for entry in preview_data:
-        st.markdown(f"---\n#### 📘 Exercise: {entry['exercise_id']} | 🖼️ Image: {entry['image']}")
-        st.write(f"**Status:** {entry['status']}")
-        for idx, mcq in enumerate(entry["mcqs"]):
-            st.markdown(f"**Q{idx+1}:** {mcq['question']}")
+    if isinstance(mcqs, list):
+        for idx, mcq in enumerate(mcqs):
+            st.markdown(f"### Q{idx + 1}")
+            st.write(mcq["question"])
             for i, opt in enumerate(mcq["options"]):
                 prefix = "✅" if i == mcq["answer_index"] else "🔘"
-                st.markdown(f"- {prefix} {opt}")
-
-    if st.button("🚀 Upload All to CMS"):
-        st.info("Uploading... Please wait.")
-        results = []
-        for entry in preview_data:
-            if not entry["mcqs"]:
-                results.append((entry["exercise_id"], entry["image"], entry["status"]))
-                continue
-            for mcq in entry["mcqs"]:
-                if len(mcq.get("options", [])) != 4:
-                    results.append((entry["exercise_id"], entry["image"], "⚠️ Invalid MCQ format"))
-                    continue
-                payload = build_payload(mcq, format_question(mcq["question"]))
-                success, code = submit_to_api(payload, entry["exercise_id"])
-                status = "✅ Uploaded" if success else f"❌ Failed ({code})"
-                results.append((entry["exercise_id"], entry["image"], status))
-
-        st.subheader("📊 Upload Summary")
-        st.table(pd.DataFrame(results, columns=["Exercise ID", "Image", "Status"]))
+                st.write(f"{prefix} {opt}")
+            send_mcq_to_api(mcq, exercise_id)
+    else:
+        st.warning("⚠️ No MCQs extracted or format invalid.")
