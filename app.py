@@ -4,6 +4,7 @@ import base64
 import json
 import requests
 import pandas as pd
+from io import BytesIO
 
 # Load secrets
 openai.api_key = st.secrets["OPENAI_API_KEY"]
@@ -19,7 +20,7 @@ debug = st.sidebar.checkbox("🔍 Show raw OpenAI JSON")
 
 # Map filenames to bytes
 def map_uploaded_images(files):
-    return {file.name: file.read() for file in files}
+    return {file.name: BytesIO(file.read()).getvalue() for file in files}
 
 # Extract MCQs from image
 def extract_mcqs_from_image(image_bytes):
@@ -47,6 +48,7 @@ def extract_mcqs_from_image(image_bytes):
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
+        st.error(f"❌ JSON parse error: {raw}")
         return []
 
 # Format question (uses <br> if numbered)
