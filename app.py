@@ -5,7 +5,7 @@ import json
 import requests
 import pandas as pd
 
-# Load API keys from secrets
+# Load secrets
 openai.api_key = st.secrets["OPENAI_API_KEY"]
 AVETI_API_TOKEN = st.secrets["AVETI_API_TOKEN"]
 
@@ -124,38 +124,42 @@ def submit_to_api(payload, exercise_id):
         headers={"Authorization": f"Bearer {AVETI_API_TOKEN}", "Content-Type": "application/json"},
         data=json.dumps({"question_json": payload})
     )
+    if response.status_code == 200:
+        st.success(f"✅ Uploaded to {exercise_id}")
+    else:
+        st.error(f"❌ Failed for {exercise_id}: {response.status_code}")
     return response.status_code == 200, response.status_code
 
 # === Main Logic ===
 if csv_file and image_files:
     df = pd.read_csv(csv_file)
-    image_map = map_uploaded_images(image_files)
+    df.columns = df.columns.str.strip()
+    st.write("📋 Columns Detected:", df.columns.tolist())
 
+    image_map = map_uploaded_images(image_files)
     preview_data = []
 
     for _, row in df.iterrows():
-        ex_id = str(row["exercise_id"]).strip()
-        img_name = row["image_filename"].strip()
+        ex_id = str(row.get("exercise_id", "")).strip()
+        img_name = row.get("image_filename", "").strip()
 
+        if not ex_id or not img_name:
+            preview_data.append({"exercise_id": ex_id, "image": img_name, "status": "❌ Missing fields", "mcqs": []})
+            continue
         if img_name not in image_map:
             preview_data.append({"exercise_id": ex_id, "image": img_name, "status": "❌ Image not uploaded", "mcqs": []})
             continue
 
         image_bytes = image_map[img_name]
         mcqs = extract_mcqs_from_image(image_bytes)
+        st.write(f"📘 {len(mcqs)} question(s) extracted from {img_name}")
 
-        if not isinstance(mcqs, list):
+        if not isinstance(mcqs, list) or not mcqs:
             preview_data.append({"exercise_id": ex_id, "image": img_name, "status": "❌ Extraction failed", "mcqs": []})
             continue
 
-        preview_data.append({
-            "exercise_id": ex_id,
-            "image": img_name,
-            "status": "🕵️ Ready",
-            "mcqs": mcqs
-        })
+        preview_data.append({"exercise_id": ex_id, "image": img_name, "status": "🕵️ Ready", "mcqs": mcqs})
 
-    # === Preview Section ===
     st.subheader("👁️ Preview Extracted MCQs")
     for entry in preview_data:
         st.markdown(f"---\n#### 📘 Exercise: {entry['exercise_id']} | 🖼️ Image: {entry['image']}")
@@ -166,27 +170,21 @@ if csv_file and image_files:
                 prefix = "✅" if i == mcq["answer_index"] else "🔘"
                 st.markdown(f"- {prefix} {opt}")
 
-    # === Confirm Upload Button ===
     if st.button("🚀 Upload All to CMS"):
-        st.subheader("📊 Upload Summary")
+        st.info("Uploading... Please wait.")
         results = []
         for entry in preview_data:
             if not entry["mcqs"]:
                 results.append((entry["exercise_id"], entry["image"], entry["status"]))
                 continue
-
-            all_success = True
             for mcq in entry["mcqs"]:
-                if len(mcq["options"]) != 4:
+                if len(mcq.get("options", [])) != 4:
                     results.append((entry["exercise_id"], entry["image"], "⚠️ Invalid MCQ format"))
-                    all_success = False
                     continue
                 payload = build_payload(mcq, format_question(mcq["question"]))
-                success, status_code = submit_to_api(payload, entry["exercise_id"])
-                if not success:
-                    all_success = False
-                    results.append((entry["exercise_id"], entry["image"], f"❌ API error: {status_code}"))
-            if all_success:
-                results.append((entry["exercise_id"], entry["image"], "✅ Uploaded"))
+                success, code = submit_to_api(payload, entry["exercise_id"])
+                status = "✅ Uploaded" if success else f"❌ Failed ({code})"
+                results.append((entry["exercise_id"], entry["image"], status))
 
+        st.subheader("📊 Upload Summary")
         st.table(pd.DataFrame(results, columns=["Exercise ID", "Image", "Status"]))
